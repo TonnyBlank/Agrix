@@ -1,0 +1,12 @@
+{
+  "name": "agrilink-backend",
+  "version": "1.0.0",
+  "description": "AgriLink X Django backend",
+  "main": "main.py",
+  "scripts": {
+    "dev": ".\\.venv\\Scripts\\python.exe manage.py runserver 127.0.0.1:3001",
+    "start": ".\\.venv\\Scripts\\python.exe -m uvicorn config.asgi:application --host 127.0.0.1 --port 3001",
+    "start:public": ".\\.venv\\Scripts\\python.exe -m uvicorn config.asgi:application --host 0.0.0.0 --port 3001",
+    "check": ".\\.venv\\Scripts\\python.exe manage.py check"
+  }
+}
