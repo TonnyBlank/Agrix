@@ -8,19 +8,21 @@ import { LogOut, User, Home, Settings, BarChart3 } from "lucide-react";
 interface DashboardLayoutProps {
   children: ReactNode;
   title: string;
-  tier: "free" | "pro" | "enterprise";
+  tier: "free" | "pro" | "company" | "admin";
 }
 
 const tierColors = {
   free: "bg-primary/10 text-primary",
   pro: "bg-gold-gradient text-foreground",
-  enterprise: "bg-accent/10 text-accent",
+  company: "bg-blue-500/10 text-blue-600",
+  admin: "bg-red-500/10 text-red-600",
 };
 
 const tierLabels = {
   free: "Free",
   pro: "Pro",
-  enterprise: "Enterprise",
+  company: "Company",
+  admin: "Admin",
 };
 
 export default function DashboardLayout({ children, title, tier }: DashboardLayoutProps) {

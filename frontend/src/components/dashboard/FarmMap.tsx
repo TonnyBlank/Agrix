@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
+import { useEffect, useMemo, useState } from "react";
+import { MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
@@ -25,6 +25,9 @@ interface FarmMapProps {
   location: string;
   subCounty?: string;
   heightClassName?: string;
+  coordinates?: { lat: number; lng: number } | null;
+  editable?: boolean;
+  onSelectCoordinates?: (coordinates: { lat: number; lng: number }) => void;
 }
 
 async function geocodeLocation(location: string): Promise<GeoResult | null> {
@@ -60,13 +63,56 @@ function MapRecenter({ lat, lon }: { lat: number; lon: number }) {
   return null;
 }
 
-export default function FarmMap({ location, subCounty, heightClassName = "h-48" }: FarmMapProps) {
+function MapClickCapture({
+  enabled,
+  onSelectCoordinates,
+}: {
+  enabled: boolean;
+  onSelectCoordinates?: (coordinates: { lat: number; lng: number }) => void;
+}) {
+  useMapEvents({
+    click(event) {
+      if (!enabled || !onSelectCoordinates) return;
+      onSelectCoordinates({
+        lat: event.latlng.lat,
+        lng: event.latlng.lng,
+      });
+    },
+  });
+
+  return null;
+}
+
+export default function FarmMap({
+  location,
+  subCounty,
+  heightClassName = "h-48",
+  coordinates,
+  editable = false,
+  onSelectCoordinates,
+}: FarmMapProps) {
   const [geo, setGeo] = useState<GeoResult | null>(null);
   const [loading, setLoading] = useState(false);
 
   const searchQuery = [subCounty, location].filter(Boolean).join(", ");
+  const activeCoordinates = useMemo(() => {
+    if (coordinates) {
+      return {
+        lat: coordinates.lat,
+        lon: coordinates.lng,
+        displayName: "Saved farm GPS point",
+      };
+    }
+
+    return geo;
+  }, [coordinates, geo]);
 
   useEffect(() => {
+    if (coordinates) {
+      setLoading(false);
+      return;
+    }
+
     if (!searchQuery.trim()) {
       setGeo(null);
       setLoading(false);
@@ -86,7 +132,7 @@ export default function FarmMap({ location, subCounty, heightClassName = "h-48" 
     return () => {
       cancelled = true;
     };
-  }, [searchQuery]);
+  }, [coordinates, searchQuery]);
 
   if (loading) {
     return (
@@ -96,10 +142,10 @@ export default function FarmMap({ location, subCounty, heightClassName = "h-48" 
     );
   }
 
-  if (!geo) {
+  if (!activeCoordinates) {
     return (
       <div className={cn("relative z-0 flex items-center justify-center rounded-2xl border border-dashed border-border bg-muted/30 px-4 text-center text-xs text-muted-foreground", heightClassName)}>
-        Set your county to see your farm location on the map
+        {editable ? "Capture your GPS or click the map to save the exact farm point" : "Set your county to see your farm location on the map"}
       </div>
     );
   }
@@ -107,7 +153,7 @@ export default function FarmMap({ location, subCounty, heightClassName = "h-48" 
   return (
     <div className={cn("relative z-0 overflow-hidden rounded-2xl border border-border shadow-sm", heightClassName)}>
       <MapContainer
-        center={[geo.lat, geo.lon]}
+        center={[activeCoordinates.lat, activeCoordinates.lon]}
         zoom={13}
         className="z-0"
         style={{ height: "100%", width: "100%" }}
@@ -118,12 +164,14 @@ export default function FarmMap({ location, subCounty, heightClassName = "h-48" 
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         />
-        <MapRecenter lat={geo.lat} lon={geo.lon} />
-        <Marker position={[geo.lat, geo.lon]}>
+        <MapRecenter lat={activeCoordinates.lat} lon={activeCoordinates.lon} />
+        <MapClickCapture enabled={editable} onSelectCoordinates={onSelectCoordinates} />
+        <Marker position={[activeCoordinates.lat, activeCoordinates.lon]}>
           <Popup>
             <div className="text-xs">
-              <p className="font-semibold">My Farm</p>
-              <p>{geo.displayName}</p>
+              <p className="font-semibold">{editable ? "Farm GPS Point" : "My Farm"}</p>
+              <p>{activeCoordinates.displayName}</p>
+              {editable ? <p className="mt-1">Click anywhere on the map to move this point.</p> : null}
             </div>
           </Popup>
         </Marker>

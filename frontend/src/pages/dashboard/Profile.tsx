@@ -28,17 +28,21 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export default function Profile() {
-  const { profile, refreshProfile, user, applyProfileUpdate } = useAuth();
+  const { profile, refreshProfile, user, applyProfileUpdate, role } = useAuth();
   const { verification, uploading, loading, uploadDocuments } = useIdVerification();
   const [searchParams] = useSearchParams();
   const status = verification?.status || "unverified";
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isSendingPhoneOtp, setIsSendingPhoneOtp] = useState(false);
+  const [isVerifyingPhoneOtp, setIsVerifyingPhoneOtp] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [localPhotoPreview, setLocalPhotoPreview] = useState<string | null>(null);
   const [frontFile, setFrontFile] = useState<File | null>(null);
   const [backFile, setBackFile] = useState<File | null>(null);
+  const [phoneOtpCode, setPhoneOtpCode] = useState("");
+  const [pendingPhoneVerification, setPendingPhoneVerification] = useState<string | null>(null);
   const [profileForm, setProfileForm] = useState({
     full_name: profile?.full_name || "",
     phone: profile?.phone || "",
@@ -55,6 +59,36 @@ export default function Profile() {
   const [activeSection, setActiveSection] = useState<
     "personal" | "contact" | "payout" | "security" | "verification" | "settings"
   >("personal");
+  const isAdmin = role === "admin";
+  const pageTitle = isAdmin ? "Admin Profile" : "My Profile";
+  const identityHeading = isAdmin ? "Admin account identity" : "Your name and profile photo for account identity.";
+  const operationsHeading = isAdmin ? "Admin workspace" : "Farm Operations";
+  const operationsDescription = isAdmin
+    ? "Use the admin dashboard for platform oversight, loan decisions, company reviews, and transaction monitoring."
+    : "Farm story, county, crops, irrigation, soil, storage, transport, and co-operative details are now managed from My Farm.";
+  const operationsCtaLabel = isAdmin ? "Open Admin Dashboard" : "Open My Farm";
+  const operationsHref = isAdmin ? "/dashboard/admin" : "/dashboard/farm";
+  const contactDescription = isAdmin
+    ? "How the platform can reach you. New phone numbers are only saved after OTP verification."
+    : "How the platform can reach you. New phone numbers are only saved after OTP verification.";
+  const verificationDescription = isAdmin
+    ? "Identity confirmation helps protect admin access and critical workflows."
+    : "Identity confirmation for trust and payouts.";
+  const sectionItems = isAdmin
+    ? [
+        { id: "personal", label: "Personal Details", icon: UserCircle2 },
+        { id: "contact", label: "Contact Details", icon: Phone },
+        { id: "security", label: "Change Password", icon: KeyRound },
+        { id: "settings", label: "App Settings", icon: Settings2 },
+      ]
+    : [
+        { id: "personal", label: "Personal Details", icon: UserCircle2 },
+        { id: "contact", label: "Contact Details", icon: Phone },
+        { id: "payout", label: "Payout Details", icon: Wallet },
+        { id: "security", label: "Change Password", icon: KeyRound },
+        { id: "verification", label: "Verification", icon: ShieldCheck },
+        { id: "settings", label: "App Settings", icon: Settings2 },
+      ];
 
   const photoPreview = useMemo(() => localPhotoPreview || profile?.photo_url || "", [localPhotoPreview, profile?.photo_url]);
 
@@ -92,6 +126,12 @@ export default function Profile() {
   }, [searchParams]);
 
   useEffect(() => {
+    if (isAdmin && (activeSection === "payout" || activeSection === "verification")) {
+      setActiveSection("personal");
+    }
+  }, [activeSection, isAdmin]);
+
+  useEffect(() => {
     setProfileForm({
       full_name: profile?.full_name || "",
       phone: profile?.phone || "",
@@ -104,6 +144,16 @@ export default function Profile() {
   }, [profile]);
 
   useEffect(() => {
+    if (!pendingPhoneVerification) return;
+
+    const normalizedProfilePhone = normalizePhone(profile?.phone || "");
+    if (normalizedProfilePhone && normalizedProfilePhone === pendingPhoneVerification) {
+      setPendingPhoneVerification(null);
+      setPhoneOtpCode("");
+    }
+  }, [pendingPhoneVerification, profile?.phone]);
+
+  useEffect(() => {
     return () => {
       if (localPhotoPreview) {
         URL.revokeObjectURL(localPhotoPreview);
@@ -111,31 +161,126 @@ export default function Profile() {
     };
   }, [localPhotoPreview]);
 
+  const normalizePhone = (value: string) => {
+    const digits = value.replace(/\D+/g, "");
+
+    if (!digits) return "";
+    if (digits.startsWith("254") && digits.length === 12) return `+${digits}`;
+    if (digits.startsWith("0") && digits.length === 10) return `+254${digits.slice(1)}`;
+    if (digits.startsWith("7") && digits.length === 9) return `+254${digits}`;
+    if (digits.startsWith("1") && digits.length === 9) return `+254${digits}`;
+    if (value.trim().startsWith("+") && digits.length >= 10) return `+${digits}`;
+
+    return value.trim();
+  };
+
+  const buildProfilePayload = (phoneOverride?: string | null) => ({
+    full_name: profileForm.full_name,
+    phone: phoneOverride ?? profileForm.phone,
+    payout_method: profileForm.payout_method || null,
+    payout_mpesa_number: profileForm.payout_method === "mpesa" ? profileForm.payout_mpesa_number : null,
+    bank_name: profileForm.payout_method === "bank" ? profileForm.bank_name : null,
+    bank_account_name: profileForm.payout_method === "bank" ? profileForm.bank_account_name : null,
+    bank_account_number: profileForm.payout_method === "bank" ? profileForm.bank_account_number : null,
+  });
+
+  const currentPhone = normalizePhone(profile?.phone || "");
+  const formPhone = normalizePhone(profileForm.phone);
+  const verifiedAuthPhone = normalizePhone(user?.phone || "");
+  const phoneChanged = formPhone !== currentPhone;
+  const phoneVerified =
+    Boolean(user?.phone_confirmed_at) &&
+    Boolean(formPhone) &&
+    formPhone === verifiedAuthPhone &&
+    formPhone === currentPhone;
+
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
     try {
+      const payload = buildProfilePayload(phoneChanged ? profile?.phone || null : formPhone || null);
       const updatedProfile = await apiFetch<typeof profile>("/profiles/me", {
         method: "PATCH",
-        body: {
-          full_name: profileForm.full_name,
-          phone: profileForm.phone,
-          payout_method: profileForm.payout_method || null,
-          payout_mpesa_number: profileForm.payout_method === "mpesa" ? profileForm.payout_mpesa_number : null,
-          bank_name: profileForm.payout_method === "bank" ? profileForm.bank_name : null,
-          bank_account_name: profileForm.payout_method === "bank" ? profileForm.bank_account_name : null,
-          bank_account_number: profileForm.payout_method === "bank" ? profileForm.bank_account_number : null,
-        } as unknown as BodyInit,
+        body: payload as unknown as BodyInit,
       });
 
       if (updatedProfile) {
         applyProfileUpdate(updatedProfile);
       }
 
-      toast.success("Profile updated successfully!");
+      if (phoneChanged) {
+        toast.success("Other profile changes were saved. Verify the new phone number with OTP to update it.");
+      } else {
+        toast.success("Profile updated successfully!");
+      }
     } catch (error) {
       toast.error("Failed to update profile: " + (error as Error).message);
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const handleSendPhoneOtp = async () => {
+    const normalizedPhone = normalizePhone(profileForm.phone);
+
+    if (!normalizedPhone || !normalizedPhone.startsWith("+254")) {
+      toast.error("Enter a valid Kenyan phone number like 0712345678 or +254712345678.");
+      return;
+    }
+
+    setIsSendingPhoneOtp(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ phone: normalizedPhone });
+      if (error) throw error;
+
+      setPendingPhoneVerification(normalizedPhone);
+      setPhoneOtpCode("");
+      setProfileForm((current) => ({ ...current, phone: normalizedPhone }));
+      toast.success(`OTP sent to ${normalizedPhone}. Enter the code to verify this number.`);
+    } catch (error) {
+      toast.error((error as Error).message || "Failed to send OTP.");
+    } finally {
+      setIsSendingPhoneOtp(false);
+    }
+  };
+
+  const handleVerifyPhoneOtp = async () => {
+    if (!pendingPhoneVerification) {
+      toast.error("Send an OTP to your phone first.");
+      return;
+    }
+
+    if (phoneOtpCode.trim().length < 6) {
+      toast.error("Enter the 6-digit OTP sent to your phone.");
+      return;
+    }
+
+    setIsVerifyingPhoneOtp(true);
+    try {
+      const { error } = await supabase.auth.verifyOtp({
+        phone: pendingPhoneVerification,
+        token: phoneOtpCode.trim(),
+        type: "phone_change",
+      });
+
+      if (error) throw error;
+
+      const updatedProfile = await apiFetch<typeof profile>("/profiles/me", {
+        method: "PATCH",
+        body: buildProfilePayload(pendingPhoneVerification) as unknown as BodyInit,
+      });
+
+      if (updatedProfile) {
+        applyProfileUpdate(updatedProfile);
+      }
+
+      await refreshProfile();
+      setPendingPhoneVerification(null);
+      setPhoneOtpCode("");
+      toast.success("Phone number verified and saved.");
+    } catch (error) {
+      toast.error((error as Error).message || "Failed to verify OTP.");
+    } finally {
+      setIsVerifyingPhoneOtp(false);
     }
   };
 
@@ -248,7 +393,7 @@ export default function Profile() {
   };
 
   return (
-    <DashboardShell title="My Profile">
+    <DashboardShell title={pageTitle}>
       <div className="space-y-5">
         <section className="bento-card overflow-hidden">
           <div className="rounded-[1.45rem] bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.16),_transparent_26%),linear-gradient(135deg,rgba(255,255,255,0.96),rgba(240,253,250,0.9))] p-4 dark:bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.15),_transparent_26%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(17,24,39,0.94))]">
@@ -301,12 +446,12 @@ export default function Profile() {
                 </div>
 
                 <div className="max-w-2xl">
-                  <p className="text-sm font-semibold text-foreground">Farm Operations</p>
+                  <p className="text-sm font-semibold text-foreground">{operationsHeading}</p>
                   <p className="mt-2 text-sm leading-7 text-muted-foreground">
-                    Farm story, county, crops, irrigation, soil, storage, transport, and co-operative details are now managed from My Farm.
+                    {operationsDescription}
                   </p>
                   <Button asChild variant="outline" className="mt-3 rounded-xl">
-                    <Link to="/dashboard/farm">Open My Farm</Link>
+                    <Link to={operationsHref}>{operationsCtaLabel}</Link>
                   </Button>
                 </div>
               </div>
@@ -316,14 +461,7 @@ export default function Profile() {
 
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-[270px_1fr]">
           <aside className="bento-card p-0 overflow-hidden">
-            {[
-              { id: "personal", label: "Personal Details", icon: UserCircle2 },
-              { id: "contact", label: "Contact Details", icon: Phone },
-              { id: "payout", label: "Payout Details", icon: Wallet },
-              { id: "security", label: "Change Password", icon: KeyRound },
-              { id: "verification", label: "Verification", icon: ShieldCheck },
-              { id: "settings", label: "App Settings", icon: Settings2 },
-            ].map((item) => (
+            {sectionItems.map((item) => (
               <button
                 key={item.id}
                 type="button"
@@ -344,7 +482,7 @@ export default function Profile() {
             {activeSection === "personal" && (
               <section className="bento-card">
                 <h3 className="font-display text-xl font-bold text-foreground">Personal Details</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Your name and profile photo for account identity.</p>
+                <p className="mt-1 text-sm text-muted-foreground">{identityHeading}</p>
                 <div className="mt-5 space-y-5">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
                     <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-border bg-muted/30">
@@ -370,9 +508,16 @@ export default function Profile() {
                     <Input value={profileForm.full_name} onChange={(e) => setProfileForm({ ...profileForm, full_name: e.target.value })} className="rounded-xl" />
                   </div>
 
-                  <div className="rounded-[1.2rem] border border-emerald-200/70 bg-emerald-50/70 p-4 text-sm text-emerald-900 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-100">
-                    Farm details were moved out of My Profile. Use <Link to="/dashboard/farm" className="font-semibold underline underline-offset-2">My Farm</Link> for county, crops, irrigation, soil, storage, transport, and your farm story.
-                  </div>
+                  {isAdmin ? (
+                    <div className="rounded-[1.2rem] border border-sky-200/70 bg-sky-50/80 p-4 text-sm text-sky-900 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-100">
+                      Admin account settings live here. Platform oversight tools, approvals, and reporting stay inside the{" "}
+                      <Link to="/dashboard/admin" className="font-semibold underline underline-offset-2">Admin Dashboard</Link>.
+                    </div>
+                  ) : (
+                    <div className="rounded-[1.2rem] border border-emerald-200/70 bg-emerald-50/70 p-4 text-sm text-emerald-900 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-100">
+                      Farm details were moved out of My Profile. Use <Link to="/dashboard/farm" className="font-semibold underline underline-offset-2">My Farm</Link> for county, crops, irrigation, soil, storage, transport, and your farm story.
+                    </div>
+                  )}
                 </div>
               </section>
             )}
@@ -380,14 +525,80 @@ export default function Profile() {
             {activeSection === "contact" && (
               <section className="bento-card">
                 <h3 className="font-display text-xl font-bold text-foreground">Contact Details</h3>
-                <p className="mt-1 text-sm text-muted-foreground">How the platform can reach you.</p>
+                <p className="mt-1 text-sm text-muted-foreground">{contactDescription}</p>
                 <div className="mt-5 grid grid-cols-1 gap-4">
                   <div className="space-y-2">
                     <Label>Phone</Label>
-                    <Input value={profileForm.phone} onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })} className="rounded-xl" />
+                    <Input
+                      value={profileForm.phone}
+                      onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                      placeholder="0712345678 or +254712345678"
+                      className="rounded-xl"
+                    />
                   </div>
+
+                  <div className="rounded-[1.2rem] border border-border bg-background/60 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">Phone verification</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {phoneVerified
+                            ? `Verified on ${new Date(user?.phone_confirmed_at || "").toLocaleDateString()}`
+                            : pendingPhoneVerification
+                              ? `OTP sent to ${pendingPhoneVerification}`
+                              : "Send an OTP to confirm this number before it is used on your profile."}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="w-fit rounded-full">
+                        {phoneVerified ? "Verified" : pendingPhoneVerification ? "Pending OTP" : "Not verified"}
+                      </Badge>
+                    </div>
+
+                    <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handleSendPhoneOtp()}
+                        disabled={isSendingPhoneOtp || !profileForm.phone.trim()}
+                        className="rounded-xl"
+                      >
+                        {isSendingPhoneOtp ? "Sending OTP..." : "Send OTP"}
+                      </Button>
+
+                      {(pendingPhoneVerification || phoneChanged) && (
+                        <>
+                          <Input
+                            value={phoneOtpCode}
+                            onChange={(e) => setPhoneOtpCode(e.target.value.replace(/\D+/g, "").slice(0, 6))}
+                            inputMode="numeric"
+                            maxLength={6}
+                            placeholder="Enter 6-digit OTP"
+                            className="rounded-xl sm:max-w-[220px]"
+                          />
+                          <Button
+                            type="button"
+                            onClick={() => void handleVerifyPhoneOtp()}
+                            disabled={isVerifyingPhoneOtp || phoneOtpCode.trim().length !== 6 || !pendingPhoneVerification}
+                            className="rounded-xl"
+                          >
+                            {isVerifyingPhoneOtp ? "Verifying..." : "Verify OTP"}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="rounded-[1.2rem] border border-border bg-muted/25 p-4 text-sm text-muted-foreground">
-                    County and farm location are now edited from <Link to="/dashboard/farm" className="font-semibold text-foreground underline underline-offset-2">My Farm</Link>.
+                    {isAdmin ? (
+                      <>
+                        Need to return to oversight tools? Open the{" "}
+                        <Link to="/dashboard/admin" className="font-semibold text-foreground underline underline-offset-2">Admin Dashboard</Link>.
+                      </>
+                    ) : (
+                      <>
+                        County and farm location are now edited from <Link to="/dashboard/farm" className="font-semibold text-foreground underline underline-offset-2">My Farm</Link>.
+                      </>
+                    )}
                   </div>
                 </div>
               </section>
@@ -480,7 +691,7 @@ export default function Profile() {
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h3 className="font-display text-xl font-bold text-foreground">Verification</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">Identity confirmation for trust and payouts.</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{verificationDescription}</p>
                   </div>
                   <Badge
                     className={`w-fit rounded-full border text-xs shadow-sm ${

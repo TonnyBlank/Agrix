@@ -9,7 +9,7 @@ const plans = [
   {
     name: "Farmer Free",
     tagline: "Start Small, Grow Smart",
-    price: "Free",
+    price: "KES 0",
     subtitle: "Forever free",
     features: [
       { text: "Basic farm profile & up to 5 listings/month", included: true },
@@ -19,8 +19,7 @@ const plans = [
       { text: "Offline mode - sync when back online", included: true },
       { text: "Secure escrow platform payments", included: true },
       { text: "AI Crop Scanner", included: false },
-      { text: "Flexible micro-loans", included: false },
-      { text: "Micro-loans & in-kind repayment", included: false },
+      { text: "Flexible micro-loans & in-kind repayment", included: false },
     ],
     cta: "Start Free",
     featured: false,
@@ -28,40 +27,20 @@ const plans = [
   {
     name: "Farmer Pro",
     tagline: "Scale Your Farm, Maximize Profits",
-    price: "$12",
+    price: "KES 1,500",
     subtitle: "/month",
     features: [
       { text: "Unlimited product listings", included: true },
-      { text: "AI Crop & Profit Advisor dashboard", included: true },
+      { text: "AI Crop Scanner & Diagnosis", included: true },
       { text: "Predict demand & optimize planting", included: true },
       { text: "Priority in buyer search results", included: true },
       { text: "Platform Trust System - secure loans", included: true },
       { text: "Real-time sales analytics & revenue trends", included: true },
-      { text: "Voice-assisted interface (Swahili)", included: true },
       { text: "Micro-loans & in-kind repayment logic", included: true },
       { text: "Dynamic Marketplace access", included: true },
     ],
     cta: "Go Pro",
     featured: true,
-  },
-  {
-    name: "Buyer Enterprise",
-    tagline: "Secure, Predictable Supply",
-    price: "$75",
-    subtitle: "/month",
-    features: [
-      { text: "Search farmers by crop, location, profile", included: true },
-      { text: "Advance volume orders", included: true },
-      { text: "Bulk order management & coordination", included: true },
-      { text: "Marketplace & performance dashboard", included: true },
-      { text: "Featured farmer listings (priority match)", included: true },
-      { text: "Automated Secure Escrow system", included: true },
-      { text: "Digital voucher disbursements", included: true },
-      { text: "Verified farmers access only", included: true },
-      { text: "Dedicated account manager", included: true },
-    ],
-    cta: "Contact Sales",
-    featured: false,
   },
 ];
 
@@ -88,7 +67,7 @@ export default function PricingSection() {
           </p>
         </motion.div>
 
-        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mx-auto grid max-w-4xl grid-cols-1 gap-6 md:grid-cols-2">
           {plans.map((plan, index) => {
             let ctaText = plan.cta;
             let ctaLink = user ? "/dashboard" : "/signup";
@@ -118,19 +97,6 @@ export default function PricingSection() {
               }
             }
 
-            if (plan.name === "Buyer Enterprise") {
-              if (!user) {
-                ctaLink = "/signup";
-              } else if (role === "buyer_enterprise") {
-                ctaText = "Current Plan";
-                ctaLink = "/dashboard/enterprise";
-                isDisabled = true;
-              } else {
-                ctaText = "Upgrade Plan";
-                ctaLink = "/dashboard/upgrade";
-              }
-            }
-
             return (
               <motion.div
                 key={plan.name}
@@ -138,7 +104,6 @@ export default function PricingSection() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ delay: index * 0.1 }}
-                id={plan.name === "Buyer Enterprise" ? "buyer-enterprise" : undefined}
                 className={`relative flex h-full flex-col rounded-[1.9rem] p-8 shadow-[0_18px_45px_-38px_rgba(15,23,42,0.35)] ${
                   plan.featured
                     ? "border-2 border-primary bg-primary text-primary-foreground md:scale-[1.02]"

@@ -1,9 +1,24 @@
 
 -- Create role enum
-CREATE TYPE public.app_role AS ENUM ('farmer_free', 'farmer_pro', 'buyer_enterprise');
+DO $$
+BEGIN
+  -- Repair the legacy enum if it still contains buyer_enterprise
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'app_role' AND typtype = 'e') THEN
+    -- Rename buyer_enterprise to company if exists
+    BEGIN
+      ALTER TYPE public.app_role RENAME VALUE 'buyer_enterprise' TO 'company';
+    EXCEPTION WHEN OTHERS THEN
+      -- If rename fails, drop and recreate
+      DROP TYPE public.app_role CASCADE;
+      CREATE TYPE public.app_role AS ENUM ('farmer_free', 'farmer_pro', 'company');
+    END;
+  ELSE
+    CREATE TYPE public.app_role AS ENUM ('farmer_free', 'farmer_pro', 'company');
+  END IF;
+END $$;
 
 -- Create profiles table
-CREATE TABLE public.profiles (
+CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL UNIQUE,
   full_name TEXT,
@@ -36,12 +51,15 @@ CREATE TABLE public.profiles (
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Users can insert own profile" ON public.profiles FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = user_id);
 
 -- Create user_roles table
-CREATE TABLE public.user_roles (
+CREATE TABLE IF NOT EXISTS public.user_roles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   role app_role NOT NULL,
@@ -50,6 +68,7 @@ CREATE TABLE public.user_roles (
 
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can view own roles" ON public.user_roles;
 CREATE POLICY "Users can view own roles" ON public.user_roles FOR SELECT USING (auth.uid() = user_id);
 
 -- Security definer function for role checks
@@ -112,7 +131,7 @@ CREATE TRIGGER update_profiles_updated_at
   FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- Feature flags table (admin-managed)
-CREATE TABLE public.feature_flags (
+CREATE TABLE IF NOT EXISTS public.feature_flags (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   feature_key TEXT NOT NULL UNIQUE,
   enabled_for app_role[] NOT NULL DEFAULT '{}',
@@ -122,21 +141,25 @@ CREATE TABLE public.feature_flags (
 
 ALTER TABLE public.feature_flags ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Anyone authenticated can read feature flags" ON public.feature_flags;
 CREATE POLICY "Anyone authenticated can read feature flags" ON public.feature_flags FOR SELECT TO authenticated USING (true);
 
 -- Seed feature flags
 INSERT INTO public.feature_flags (feature_key, enabled_for, description) VALUES
-  ('ai_price_guidance', '{farmer_free,farmer_pro,buyer_enterprise}', 'Basic AI price guidance'),
-  ('ai_crop_advisor', '{farmer_pro,buyer_enterprise}', 'Advanced AI crop & profit advisor'),
-  ('unlimited_listings', '{farmer_pro,buyer_enterprise}', 'Unlimited product listings'),
-  ('voice_interface', '{farmer_pro,buyer_enterprise}', 'Voice-assisted interface'),
+  ('ai_price_guidance', '{farmer_free,farmer_pro,company}', 'Basic AI price guidance'),
+  ('ai_crop_advisor', '{farmer_pro,company}', 'Advanced AI crop & profit advisor'),
+  ('unlimited_listings', '{farmer_pro,company}', 'Unlimited product listings'),
+  ('voice_interface', '{farmer_pro,company}', 'Voice-assisted interface'),
   ('micro_loans', '{farmer_pro}', 'Micro-loan access'),
-  ('smart_logistics', '{farmer_pro,buyer_enterprise}', 'Automated delivery matching'),
-  ('contract_farming', '{buyer_enterprise}', 'Contract farming module'),
-  ('bulk_orders', '{buyer_enterprise}', 'Bulk order management'),
-  ('predictive_analytics', '{buyer_enterprise}', 'AI supply & demand forecasting'),
-  ('escrow_payments', '{farmer_free,farmer_pro,buyer_enterprise}', 'M-Pesa escrow system'),
-  ('community_access', '{farmer_free,farmer_pro,buyer_enterprise}', 'Community tips & alerts'),
-  ('sales_analytics', '{farmer_pro,buyer_enterprise}', 'Real-time sales analytics'),
+  ('smart_logistics', '{farmer_pro,company}', 'Automated delivery matching'),
+  ('contract_farming', '{company}', 'Contract farming module'),
+  ('bulk_orders', '{company}', 'Bulk order management'),
+  ('predictive_analytics', '{company}', 'AI supply & demand forecasting'),
+  ('escrow_payments', '{farmer_free,farmer_pro,company}', 'M-Pesa escrow system'),
+  ('community_access', '{farmer_free,farmer_pro,company}', 'Community tips & alerts'),
+  ('sales_analytics', '{farmer_pro,company}', 'Real-time sales analytics'),
   ('priority_search', '{farmer_pro}', 'Priority in buyer search results'),
-  ('export_reports', '{buyer_enterprise}', 'Export reports & projections');
+  ('export_reports', '{company}', 'Export reports & projections')
+ON CONFLICT (feature_key) DO UPDATE SET
+  enabled_for = EXCLUDED.enabled_for,
+  description = EXCLUDED.description;

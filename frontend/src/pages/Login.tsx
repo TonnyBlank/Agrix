@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import BrandWordmark from "@/components/branding/BrandWordmark";
 import { supabase } from "@/integrations/supabase/client";
@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, ArrowLeft } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { Eye, EyeOff, Home } from "lucide-react";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -15,25 +16,33 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { session } = useAuth();
+
+  useEffect(() => {
+    if (session) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [navigate, session]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
       
       if (error) {
+        const normalizedMessage = error.message.toLowerCase();
         toast({
           title: "Login failed",
           description:
-            error.message.toLowerCase().includes("invalid login credentials")
+            normalizedMessage.includes("invalid login credentials")
               ? "Incorrect email or password. If you do not have an account yet, please sign up first."
-              : error.message,
+              : normalizedMessage.includes("email not confirmed")
+                ? "Your account is not verified yet. Open the confirmation email from Supabase, then try again."
+                : error.message,
           variant: "destructive",
         });
-      } else {
-        navigate("/dashboard");
       }
     } catch (err) {
       const message =
@@ -55,9 +64,12 @@ export default function LoginPage() {
       {/* Left - form */}
       <div className="flex flex-1 items-center justify-center p-4 sm:p-6 lg:p-8">
         <div className="w-full max-w-md">
-          <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-8">
-            <ArrowLeft className="w-4 h-4" /> Back to home
-          </Link>
+          <Button asChild variant="outline" size="sm" className="mb-8 inline-flex">
+            <Link to="/">
+              <Home className="w-4 h-4" />
+              Home
+            </Link>
+          </Button>
 
           <div className="flex items-center gap-2 mb-2">
             <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
@@ -128,7 +140,7 @@ export default function LoginPage() {
           <h2 className="text-3xl font-display font-bold text-primary-foreground mb-4">
             Farm Smarter. Earn More.
           </h2>
-          <p className="text-agri-green-200/70 text-lg">
+          <p className="text-gradient-gold text-lg">
             Join 10,000+ farmers and buyers transforming agriculture across Kenya.
           </p>
         </div>

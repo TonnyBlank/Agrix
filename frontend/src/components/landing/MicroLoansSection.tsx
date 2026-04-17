@@ -24,7 +24,7 @@ const cycleSteps = [
   {
     step: "03",
     title: "Loan Access",
-    description: "Farmer Pro starts at KES 10K-30K while Buyer Enterprise ranges from KES 10K up to KES 500K.",
+    description: "Farmer Pro starts around KES 10K-30K, then scales higher as repayment and marketplace performance improve.",
     desktopClass: "left-1/2 bottom-0 -translate-x-1/2 translate-y-1/2",
     panelClass: "border-amber-200 bg-amber-50/90",
     badgeClass: "bg-amber-500",
@@ -80,8 +80,7 @@ export default function MicroLoansSection() {
           </h2>
           <p className="mx-auto mt-5 max-w-3xl text-lg leading-relaxed text-muted-foreground">
             AgriLink X connects marketplace trust, delivery history, and repayment behavior to create financing
-            access that fits real trade activity. Farmers and buyers get clearer loan pathways based on how they
-            use the platform.
+            access that fits real trade activity. Farmers get clearer loan pathways based on how they use the platform.
           </p>
         </motion.div>
 
@@ -100,9 +99,8 @@ export default function MicroLoansSection() {
             </h3>
             <p className="mx-auto mt-4 max-w-3xl text-base leading-8 text-muted-foreground">
               Loan access is not random. It grows from real marketplace activity, trusted repayments, and successful
-              platform use. That is why Farmer Pro starts with <span className="font-semibold text-foreground">KES 10K-30K</span>,
-              while Buyer Enterprise begins from <span className="font-semibold text-foreground">KES 10K</span> and can scale
-              up to <span className="font-semibold text-foreground">KES 500K</span> with verified business activity.
+              platform use. That is why Farmer Pro starts with <span className="font-semibold text-foreground">KES 10K-30K</span>
+              and can grow meaningfully as verified trading activity and repayment history get stronger.
             </p>
           </div>
 

@@ -1,57 +1,59 @@
 # AgriLink X Backend
 
-The backend runtime is now Python + Django.
+The backend is a Django application that preserves the REST API shape expected by the frontend while using Supabase as the system of record.
 
-It keeps the existing REST API shape used by the frontend while continuing to use Supabase for auth, data, storage, and admin user management. That keeps the migration focused on the server framework instead of forcing a database rewrite at the same time.
+## Stack
 
-## Quick Start
+- Django 5
+- Python
+- uvicorn for ASGI serving
+- Supabase for auth, database, storage, and admin-backed data
+
+## What It Handles
+
+- profile and auth-backed user data
+- marketplace and order APIs
+- micro-loans and repayment flows
+- M-Pesa sandbox or mock-backed payment flows
+- company APIs for:
+  - company profile creation
+  - company dashboard data
+  - company products
+  - company partners
+  - company procurement requests
+  - admin company verification
+- crop scanner endpoints with Gemini support
+
+## Setup
 
 ```bash
 cd backend
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env
+cp .env.example .env
 ```
 
-Run the backend:
+## Run Locally
 
 ```bash
-npm run start
+cd backend
+python manage.py runserver
 ```
 
-Optional attached development server:
+The development server defaults to:
 
-```bash
-npm run dev
+```text
+http://127.0.0.1:3001
 ```
 
 Health check:
 
 ```text
-http://localhost:3001/health
+http://127.0.0.1:3001/health
 ```
 
-## Gemini Crop Scanner
-
-The crop scanner can use Gemini when you add these values to `backend/.env`:
-
-```text
-GEMINI_API_KEY=your-google-gemini-api-key
-GEMINI_MODEL=gemini-2.5-flash
-```
-
-If `GEMINI_API_KEY` is not set, the scanner falls back to the built-in heuristic response.
-
-## What Changed
-
-- FastAPI is replaced by Django
-- Supabase remains the system of record
-- Existing `/api/*` frontend routes are preserved
-- M-Pesa flow is supported with sandbox/mock fallback
-- `main.py` now exposes the Django ASGI application for `uvicorn` compatibility
-
-## Main Route Groups
+## Main API Areas
 
 - `/api/products`
 - `/api/scanner/crops`
@@ -62,14 +64,57 @@ If `GEMINI_API_KEY` is not set, the scanner falls back to the built-in heuristic
 - `/api/id-verification`
 - `/api/micro-loans`
 - `/api/payments`
+- `/api/companies`
+- `/api/farmer/companies`
 - `/api/admin`
+
+## Important Files
+
+- `manage.py`: main development entrypoint
+- `main.py`: ASGI compatibility shim
+- `config/settings.py`: Django settings
+- `config/urls.py`: API route wiring
+- `api/views_core.py`: shared user, profile, product, order, and loan logic
+- `api/views_companies.py`: company and admin-company flows
+- `api/views_admin.py`: admin endpoints
+
+## Environment Notes
+
+The backend expects Supabase configuration in `.env`.
+
+For the crop scanner, Gemini is optional:
+
+```text
+GEMINI_API_KEY=your-google-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+If `GEMINI_API_KEY` is missing, the scanner falls back to heuristic output.
+
+## Useful Commands
+
+Check Django config:
+
+```bash
+.venv/bin/python manage.py check
+```
+
+Run with explicit host and port:
+
+```bash
+.venv/bin/python manage.py runserver 127.0.0.1:3001
+```
+
+Run ASGI app directly:
+
+```bash
+.venv/bin/python -m uvicorn config.asgi:application --host 127.0.0.1 --port 3001
+```
 
 ## Notes
 
-- The active Django project lives in `backend/config/`.
-- `backend/manage.py` is the standard development entrypoint.
-- `backend/main.py` is kept as a small ASGI shim for compatibility with existing process commands.
+- `manage.py` is the main local entrypoint
+- Profile updates support extended fields including farm operations and GPS coordinates
+- Company dashboard data depends on the company and procurement tables being present in Supabase
 
----
-
-For overall project documentation, see the [Root README](../README.md).
+For the overall project, see the [root README](../README.md).

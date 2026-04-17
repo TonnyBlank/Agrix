@@ -146,7 +146,7 @@ def mark_order_paid(order_id: str, checkout_request_id: str, receipt_number: str
     )
 
 
-SCANNER_ALLOWED_ROLES = {"farmer_pro", "buyer_enterprise", "admin"}
+SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
 SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
@@ -167,6 +167,10 @@ SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
             "Remove heavily infected plant material and destroy it away from the field.",
             "Improve airflow around the crop canopy to reduce moisture retention.",
         ],
+        "fertilizerRecommendations": [
+            "Avoid high-nitrogen fertilizers which encourage lush, susceptible growth.",
+            "Apply potassium-rich foliar feeds to strengthen cell walls."
+        ],
         "prevention": "Improve airflow, reduce leaf wetness, and avoid late evening irrigation.",
     },
     {
@@ -183,6 +187,10 @@ SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
             "Remove severely affected plants early to reduce field pressure.",
             "Control alternate grass hosts around the plot to lower vector activity.",
             "Use neem-based pest suppression where suitable for early vector management.",
+        ],
+        "fertilizerRecommendations": [
+            "Ensure adequate nitrogen top-dressing to support plant recovery.",
+            "Apply zinc or balanced micronutrients to reduce overall plant stress."
         ],
         "prevention": "Use resistant seed varieties and maintain clean field edges before the next planting cycle.",
     },
@@ -201,6 +209,10 @@ SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
             "Use copper soap where it fits your crop-management plan.",
             "Reduce splash spread by watering close to the soil line.",
         ],
+        "fertilizerRecommendations": [
+            "Maintain balanced calcium levels to strengthen plant immunity.",
+            "Avoid excessive nitrogen applications during active infection."
+        ],
         "prevention": "Use clean seed, avoid handling plants when wet, and rotate away from susceptible crops after harvest.",
     },
     {
@@ -217,6 +229,10 @@ SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
             "Continue using compost or organic foliar feeds as planned.",
             "Keep the field clean and remove weak plant tissue early.",
             "Maintain balanced soil moisture and avoid plant stress.",
+        ],
+        "fertilizerRecommendations": [
+            "Continue with a balanced NPK fertilizer application based on the crop's growth stage.",
+            "Incorporate organic matter or compost to improve soil health."
         ],
         "prevention": "Keep monitoring twice a week and continue feeding with balanced nutrients.",
     },
@@ -240,6 +256,7 @@ SCANNER_GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
         "description": {"type": "string"},
         "treatment": {"type": "string"},
         "organicAlternatives": {"type": "array", "items": {"type": "string"}},
+        "fertilizerRecommendations": {"type": "array", "items": {"type": "string"}},
         "prevention": {"type": "string"},
     },
     "required": [
@@ -253,6 +270,7 @@ SCANNER_GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
         "description",
         "treatment",
         "organicAlternatives",
+        "fertilizerRecommendations",
         "prevention",
     ],
 }
@@ -316,6 +334,15 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
     if not normalized_alternatives:
         normalized_alternatives = [str(item).strip() for item in fallback.get("organicAlternatives") or [] if str(item).strip()]
 
+    fertilizer_recommendations = raw.get("fertilizerRecommendations")
+    normalized_fertilizers = [
+        str(item).strip()
+        for item in (fertilizer_recommendations if isinstance(fertilizer_recommendations, list) else [])
+        if str(item).strip()
+    ]
+    if not normalized_fertilizers:
+        normalized_fertilizers = [str(item).strip() for item in fallback.get("fertilizerRecommendations") or [] if str(item).strip()]
+
     return {
         "disease": normalize_text("disease"),
         "scientificName": normalize_text("scientificName"),
@@ -327,6 +354,7 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
         "description": normalize_text("description"),
         "treatment": normalize_text("treatment"),
         "organicAlternatives": normalized_alternatives[:5],
+        "fertilizerRecommendations": normalized_fertilizers[:5],
         "prevention": normalize_text("prevention"),
     }
 
@@ -344,7 +372,8 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         "Describe the most likely visible crop issue or return Healthy Produce if no clear disease symptoms are visible. "
         "Keep treatment and prevention practical for field use. "
         "Set severity and spreadRisk to one of Low, Moderate, or High. "
-        "Set affectedArea as a short range like 0-5% or 20-35%."
+        "Set affectedArea as a short range like 0-5% or 20-35%. "
+        "Provide 2-3 specific fertilizerRecommendations."
     )
     payload = {
         "contents": [
@@ -663,7 +692,11 @@ def products_upload_image(request: HttpRequest):
 def orders_selling(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
-    rows, _ = request.supabase.select("orders", filters={"farmer_id": f"eq.{request.user_id}"}, order="created_at.desc")
+    rows, _ = request.supabase.select(
+        "orders",
+        filters={"farmer_id": f"eq.{request.user_id}", "payment_status": "neq.failed"},
+        order="created_at.desc",
+    )
     return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
 
 
@@ -672,7 +705,11 @@ def orders_selling(request: HttpRequest):
 def orders_buying(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
-    rows, _ = request.supabase.select("orders", filters={"buyer_id": f"eq.{request.user_id}"}, order="created_at.desc")
+    rows, _ = request.supabase.select(
+        "orders",
+        filters={"buyer_id": f"eq.{request.user_id}", "payment_status": "neq.failed"},
+        order="created_at.desc",
+    )
     return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
 
 
@@ -807,9 +844,11 @@ def order_status(request: HttpRequest, order_id: str):
 def profile_me(request: HttpRequest):
     fallback_full_name = request.auth_user.get("user_metadata", {}).get("full_name")
     if request.method == "GET":
-        ensure_profile_exists(request.supabase, request.user_id, fallback_full_name)
+        profile = ensure_profile_exists(request.supabase, request.user_id, fallback_full_name)
         role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
-        profile, _ = request.supabase.select("profiles", filters={"user_id": f"eq.{request.user_id}"}, single=True)
+        if role in {"farmer_pro", "company"}:
+            refreshed_profile, _ = request.supabase.select("profiles", filters={"user_id": f"eq.{request.user_id}"}, single=True)
+            profile = refreshed_profile or profile
         return JsonResponse({"profile": profile, "role": role})
     if request.method != "PATCH":
         return method_not_allowed(["GET", "PATCH"])
@@ -901,7 +940,7 @@ def profile_me_role(request: HttpRequest):
     if request.method != "PATCH":
         return method_not_allowed(["PATCH"])
     next_role = parse_json_body(request).get("role")
-    if next_role not in {"farmer_free", "farmer_pro", "buyer_enterprise"}:
+    if next_role not in {"farmer_free", "farmer_pro", "company"}:
         raise ApiException("Invalid role", 400)
     try:
         fallback_full_name = request.auth_user.get("user_metadata", {}).get("full_name")

@@ -6,6 +6,10 @@ import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { AdminUser, AppRole, ROLE_OPTIONS, adminRoleBadgeClass, adminRoleRowClass, adminRoleSurfaceClass, adminRoleTone, adminTone, formatDateTime } from "./shared";
 
+function normalizeAdminRole(role: AppRole): AppRole {
+  return role === "company" ? "farmer_pro" : role;
+}
+
 function UserCard({
   user,
   savingKey,
@@ -78,7 +82,9 @@ export default function AdminUsers() {
 
   useEffect(() => {
     void apiFetch<AdminUser[]>("/admin/users")
-      .then(setUsers)
+      .then((rows) =>
+        setUsers(rows.map((user) => ({ ...user, role: normalizeAdminRole(user.role) }))),
+      )
       .catch((error) => setErrorMessage(error instanceof Error ? error.message : "Failed to load users."));
   }, []);
 
@@ -122,13 +128,13 @@ export default function AdminUsers() {
         role: "farmer_pro" as const,
         label: "Farmer Pro",
         icon: Sprout,
-        detail: "Growth-focused farmers with premium workflow access.",
+        detail: "Premium members with advanced workflow access.",
       },
       {
-        role: "buyer_enterprise" as const,
-        label: "Buyer Enterprise",
+        role: "company" as const,
+        label: "Company",
         icon: Building2,
-        detail: "Procurement teams and enterprise buyers.",
+        detail: "B2B suppliers and agricultural companies.",
       },
       {
         role: "admin" as const,

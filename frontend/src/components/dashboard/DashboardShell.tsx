@@ -6,7 +6,7 @@ import { AppSidebar } from "./AppSidebar";
 interface DashboardShellProps {
   children: ReactNode;
   title?: string;
-  variant?: "standard" | "pro" | "enterprise";
+  variant?: "standard" | "pro" | "company";
 }
 
 function DashboardShellContent({ children, title }: Pick<DashboardShellProps, "children" | "title">) {

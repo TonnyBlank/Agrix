@@ -19,7 +19,7 @@ function securityTone(type: LoanSecurityType) {
 }
 
 function loanApplicantTone(role: LoanRole) {
-  return role === "buyer_enterprise" ? adminTone("sky") : adminTone("emerald");
+  return role === "company" ? adminTone("emerald") : adminTone("emerald");
 }
 
 function listToMultiline(items: string[] | null | undefined) {
@@ -59,7 +59,7 @@ function LoanOfferCard({
         <div>
           <p className="font-semibold text-foreground">{offer.product_title}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {offer.applicant_role === "farmer_pro" ? "Visible to qualified farmers" : "Visible to qualified buyer enterprises"}
+            Visible to qualified Pro borrowers
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -132,7 +132,6 @@ function LoanOfferCard({
 export default function AdminLoans() {
   const [loanOffers, setLoanOffers] = useState<AdminLoanOffer[]>([]);
   const [offerSearch, setOfferSearch] = useState("");
-  const [offerRoleFilter, setOfferRoleFilter] = useState<"all" | "farmer_pro" | "buyer_enterprise">("all");
   const [loanOfferForm, setLoanOfferForm] = useState<LoanOfferFormState>(initialLoanOfferForm);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -228,20 +227,19 @@ export default function AdminLoans() {
 
   const normalizedOfferSearch = offerSearch.trim().toLowerCase();
   const filteredOffers = loanOffers.filter((offer) => {
+    if (offer.applicant_role !== "farmer_pro") return false;
     const haystack = [offer.id, offer.product_title, offer.note, offer.speed, offer.security_type, offer.branch_name, offer.branch_location, ...(offer.collateral_types ?? []), ...(offer.required_documents ?? []), LOAN_PRODUCT_TITLES[offer.product_type], offer.applicant_role]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
     const matchesSearch = !normalizedOfferSearch || haystack.includes(normalizedOfferSearch);
-    const matchesRole = offerRoleFilter === "all" || offer.applicant_role === offerRoleFilter;
-    return matchesSearch && matchesRole;
+    return matchesSearch;
   });
 
   const activeOffers = filteredOffers.filter((offer) => offer.is_active);
   const inactiveOffers = filteredOffers.filter((offer) => !offer.is_active);
   const totalOfferValue = filteredOffers.reduce((sum, offer) => sum + Number(offer.max_amount ?? 0), 0);
   const farmerOffers = filteredOffers.filter((offer) => offer.applicant_role === "farmer_pro");
-  const enterpriseOffers = filteredOffers.filter((offer) => offer.applicant_role === "buyer_enterprise");
 
   return (
     <DashboardShell title="Loan Analytics">
@@ -253,17 +251,17 @@ export default function AdminLoans() {
             <div>
               <span className="rounded-full border border-sky-200 bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 dark:border-sky-500/30 dark:bg-background/70 dark:text-sky-300">Loan Publishing</span>
               <h3 className="mt-4 font-display text-2xl font-bold text-foreground">Create a loan offer for qualified borrowers</h3>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Publish once from admin, then the offer appears on the borrower micro-loan page for the matching Farmer Pro or Buyer Enterprise accounts.</p>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Publish once from admin, then the offer appears on the borrower micro-loan page for matching Pro accounts.</p>
             </div>
             <div className="rounded-[1.25rem] border border-sky-200 bg-white/90 px-4 py-3 text-sm shadow-sm dark:border-sky-500/20 dark:bg-background/70">
               <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700 dark:text-sky-300">Published offers</p>
               <p className="mt-2 font-display text-2xl font-bold text-foreground">{formatCount(filteredOffers.length)} offers</p>
-              <p className="mt-1 text-muted-foreground">{formatCount(farmerOffers.length)} farmer and {formatCount(enterpriseOffers.length)} enterprise offers in view.</p>
+              <p className="mt-1 text-muted-foreground">{formatCount(farmerOffers.length)} Pro offers in view.</p>
             </div>
           </div>
 
           <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <select value={loanOfferForm.applicant_role} onChange={(event) => setLoanOfferForm((current) => ({ ...current, applicant_role: event.target.value as "farmer_pro" | "buyer_enterprise" }))} className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70"><option value="farmer_pro">farmer_pro</option><option value="buyer_enterprise">buyer_enterprise</option></select>
+            <select value={loanOfferForm.applicant_role} onChange={(event) => setLoanOfferForm((current) => ({ ...current, applicant_role: event.target.value as "farmer_pro" }))} className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70"><option value="farmer_pro">farmer_pro</option></select>
             <select value={loanOfferForm.product_type} onChange={(event) => { const nextType = event.target.value as LoanProductType; setLoanOfferForm((current) => ({ ...current, product_type: nextType, product_title: LOAN_PRODUCT_TITLES[nextType] })); }} className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70">{Object.entries(LOAN_PRODUCT_TITLES).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
             <input value={loanOfferForm.product_title} onChange={(event) => setLoanOfferForm((current) => ({ ...current, product_title: event.target.value }))} placeholder="Product title" className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70" />
             <input value={loanOfferForm.max_amount} onChange={(event) => setLoanOfferForm((current) => ({ ...current, max_amount: event.target.value }))} placeholder="Maximum amount" className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70" />
@@ -296,12 +294,7 @@ export default function AdminLoans() {
           </div>
           <div className="mt-6 rounded-[2rem] border border-violet-200/70 bg-[radial-gradient(circle_at_top_right,_rgba(167,139,250,0.18),_transparent_35%),linear-gradient(135deg,rgba(255,255,255,0.98),rgba(245,243,255,0.94))] p-6 shadow-[0_20px_50px_-28px_rgba(139,92,246,0.2)] dark:border-violet-500/20 dark:bg-[radial-gradient(circle_at_top_right,_rgba(167,139,250,0.16),_transparent_35%),linear-gradient(135deg,rgba(15,23,42,0.96),rgba(24,24,27,0.94))]">
             <h3 className="font-display text-xl font-bold text-foreground">Loan Offers Workspace</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Filter and manage the published offers from one clean place. Loan decisions now live in their own separate admin page.</p>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <button type="button" onClick={() => setOfferRoleFilter("all")} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${offerRoleFilter === "all" ? "bg-foreground text-background" : "border border-border bg-background text-foreground"}`}>All Roles {formatCount(filteredOffers.length)}</button>
-              <button type="button" onClick={() => setOfferRoleFilter("farmer_pro")} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${offerRoleFilter === "farmer_pro" ? "bg-emerald-600 text-white" : "border border-border bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"}`}>Farmer Pro {formatCount(farmerOffers.length)}</button>
-              <button type="button" onClick={() => setOfferRoleFilter("buyer_enterprise")} className={`rounded-full px-3 py-1.5 text-xs font-semibold ${offerRoleFilter === "buyer_enterprise" ? "bg-sky-600 text-white" : "border border-border bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300"}`}>Buyer Enterprise {formatCount(enterpriseOffers.length)}</button>
-            </div>
+            <p className="mt-1 text-sm text-muted-foreground">Manage the published Pro loan offers from one clean place. Loan decisions now live in their own separate admin page.</p>
             <div className="relative mt-4"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={offerSearch} onChange={(event) => setOfferSearch(event.target.value)} placeholder="Search loan offers" className="h-11 rounded-xl pl-10" /></div>
             <p className="mt-3 text-xs text-muted-foreground">{formatCount(filteredOffers.length)} offers found</p>
           </div>

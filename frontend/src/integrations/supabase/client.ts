@@ -2,14 +2,14 @@
 import { createClient, processLock } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-const DEFAULT_SUPABASE_URL = 'https://snmypoaazklmqmoddzum.supabase.co';
-const DEFAULT_SUPABASE_PUBLISHABLE_KEY = 'sb_publishable__gAic09p_CREPMJ6IQ8kXw_F08FdYlW';
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  import.meta.env.VITE_SUPABASE_ANON_KEY ||
-  DEFAULT_SUPABASE_PUBLISHABLE_KEY;
+  import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  throw new Error('Missing Supabase environment variables');
+}
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
@@ -17,8 +17,8 @@ const SUPABASE_KEY =
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_KEY, {
   auth: {
     storage: localStorage,
-    persistSession: true,
-    autoRefreshToken: true,
+    persistSession: false,
+    autoRefreshToken: false,
     lock: processLock,
     lockAcquireTimeout: 15000,
   }

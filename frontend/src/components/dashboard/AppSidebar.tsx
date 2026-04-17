@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
+  Bell,
   BarChart3,
+  Building2,
   Calendar,
   ChevronDown,
   ChevronLeft,
@@ -11,7 +13,9 @@ import {
   LucideIcon,
   MessageSquare,
   Package,
+  Radar,
   ScanLine,
+  Settings2,
   ShieldCheck,
   ShoppingCart,
   Sprout,
@@ -53,7 +57,9 @@ const adminNav = [
   { title: "Loan Analytics", url: "/dashboard/admin/loans", icon: CreditCard },
   { title: "Loan Decisions", url: "/dashboard/admin/loan-decisions", icon: ClipboardList },
   { title: "Transactions", url: "/dashboard/admin/transactions", icon: ClipboardList },
+  { title: "Company Review", url: "/dashboard/admin/companies", icon: Building2 },
   { title: "User Roles", url: "/dashboard/admin/users", icon: Users },
+  { title: "Profile & Settings", url: "/dashboard/profile", icon: Settings2 },
 ];
 
 const farmerNav = [
@@ -61,10 +67,27 @@ const farmerNav = [
   { title: "Upload & Sell", url: "/dashboard/products", icon: Package },
 ];
 
+const companyNav = [
+  { title: "Company Hub", url: "/dashboard/company", icon: Building2 },
+  { title: "Products", url: "/dashboard/company/products", icon: Package },
+  { title: "Partners", url: "/dashboard/company/partners", icon: Users },
+  { title: "Orders", url: "/dashboard/company/orders", icon: ClipboardList },
+  { title: "Procurement", url: "/dashboard/company/procurement", icon: ClipboardList },
+  { title: "Company Profile", url: "/dashboard/company/settings", icon: Settings2 },
+  { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
+  { title: "Marketplace", url: "/dashboard/marketplace", icon: ShoppingCart },
+];
+
 const tradeNav = [
   { title: "Marketplace", url: "/dashboard/marketplace", icon: ShoppingCart },
   { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
   { title: "Orders", url: "/dashboard/orders", icon: ClipboardList },
+];
+
+const systemNav = [
+  { title: "Notifications", url: "/dashboard/notifications", icon: Bell },
+  { title: "Activity", url: "/dashboard/activity", icon: Radar },
+  { title: "Discover", url: "/dashboard/discover", icon: Users },
 ];
 
 const intelligenceNav = [
@@ -79,6 +102,10 @@ type NavItem = {
   icon: LucideIcon;
   pro?: boolean;
 };
+
+function isProRole(role: string | null | undefined) {
+  return role === "farmer_pro" || role === "company";
+}
 
 type NavChildItem = {
   title: string;
@@ -119,7 +146,8 @@ function NavGroup({ label, items, collapsed }: NavGroupProps) {
               location.pathname === item.url ||
               (item.url === "/dashboard" && location.pathname === "/dashboard/free") ||
               (item.url === "/dashboard" && location.pathname === "/dashboard/pro") ||
-              (item.url === "/dashboard" && location.pathname === "/dashboard/enterprise");
+              (item.url === "/dashboard" && location.pathname === "/dashboard/company") ||
+              (item.url === "/dashboard/admin" && location.pathname.startsWith("/dashboard/admin"));
 
             return (
               <SidebarMenuItem key={item.title}>
@@ -137,7 +165,7 @@ function NavGroup({ label, items, collapsed }: NavGroupProps) {
                   >
                     <item.icon className="h-4 w-4 shrink-0" />
                     {!collapsed && <span className="truncate">{item.title}</span>}
-                    {!collapsed && item.pro && role !== "farmer_pro" && role !== "buyer_enterprise" && (
+                    {!collapsed && item.pro && !isProRole(role) && (
                       <span className="ml-auto rounded-full bg-gold-500/18 px-1.5 py-0.5 text-[10px] font-semibold text-gold-400">
                         PRO
                       </span>
@@ -200,7 +228,7 @@ function GrowthNavGroup({ collapsed }: GrowthNavGroupProps) {
             >
               <CreditCard className="h-4 w-4 shrink-0" />
               {!collapsed && <span className="truncate">Micro Loans</span>}
-              {!collapsed && role !== "farmer_pro" && role !== "buyer_enterprise" && (
+              {!collapsed && !isProRole(role) && (
                 <span className="ml-auto rounded-full bg-gold-500/18 px-1.5 py-0.5 text-[10px] font-semibold text-gold-400">
                   PRO
                 </span>
@@ -272,25 +300,38 @@ export function AppSidebar() {
   const { signOut, profile, role, user } = useAuth();
   const navigate = useNavigate();
   const isAdmin = role === "admin";
+  const isCompany = role === "company";
+  const profileHref = isCompany ? "/dashboard/company/settings" : "/dashboard/profile";
   const displayName =
     profile?.full_name ||
     (typeof user?.user_metadata?.full_name === "string" ? user.user_metadata.full_name : null) ||
     "User";
 
   const tierBadge =
-    role === "buyer_enterprise"
-      ? { label: "Enterprise", cls: "bg-sidebar-accent/70 text-sidebar-foreground" }
-      : role === "farmer_pro"
-        ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
-        : role === "admin"
-          ? { label: "Admin", cls: "bg-sidebar-accent/70 text-sidebar-foreground" }
-          : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
+    isProRole(role)
+      ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
+      : role === "admin"
+        ? { label: "Admin", cls: "bg-sidebar-accent/70 text-sidebar-foreground" }
+        : role === "company"
+          ? { label: "Company", cls: "bg-sky-500/18 text-sky-200" }
+        : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
+
+  const dashboardHomeHref =
+    role === "admin"
+      ? "/dashboard/admin"
+      : role === "company"
+        ? "/dashboard/company"
+        : "/dashboard";
+
+  const roleAwareMainNav = mainNav.map((item) =>
+    item.url === "/dashboard" ? { ...item, url: dashboardHomeHref } : item,
+  );
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border/55 bg-sidebar">
       <SidebarHeader className="border-b border-sidebar-border/60 px-3 py-4">
         <div className="flex items-start gap-2.5">
-          <Link to="/dashboard" className="flex min-w-0 flex-1 items-start gap-2.5">
+          <Link to={dashboardHomeHref} className="flex min-w-0 flex-1 items-start gap-2.5">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[1rem] bg-emerald-500 text-primary-foreground shadow-[0_10px_24px_-12px_rgba(16,185,129,0.8)]">
               <span className="font-display text-base font-bold">A</span>
             </div>
@@ -319,13 +360,23 @@ export function AppSidebar() {
 
       <SidebarContent className="space-y-4 px-2.5 py-4">
         {isAdmin ? (
-          <NavGroup label="Administration" items={adminNav} collapsed={collapsed} />
+          <>
+            <NavGroup label="Administration" items={adminNav} collapsed={collapsed} />
+            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+          </>
+        ) : isCompany ? (
+          <>
+            <NavGroup label="Company Workspace" items={companyNav} collapsed={collapsed} />
+            <NavGroup label="Insights" items={[{ title: "Performance", url: "/dashboard/analytics", icon: BarChart3 }]} collapsed={collapsed} />
+            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+          </>
         ) : (
           <>
-            <NavGroup label="Command Center" items={mainNav} collapsed={collapsed} />
+            <NavGroup label="Command Center" items={roleAwareMainNav} collapsed={collapsed} />
             <NavGroup label="Farm Operations" items={farmerNav} collapsed={collapsed} />
             <NavGroup label="Trade" items={tradeNav} collapsed={collapsed} />
             <NavGroup label="Intelligence" items={intelligenceNav} collapsed={collapsed} />
+            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
             <GrowthNavGroup collapsed={collapsed} />
           </>
         )}
@@ -333,7 +384,7 @@ export function AppSidebar() {
 
       <SidebarFooter className="border-t border-sidebar-border/60 p-3">
         {!collapsed && (
-          <Link to="/dashboard/profile" className="mb-3 flex items-center gap-2.5">
+          <Link to={profileHref} className="mb-3 flex items-center gap-2.5">
             {profile?.photo_url ? (
               <img
                 src={profile.photo_url}
@@ -355,7 +406,7 @@ export function AppSidebar() {
         <Button
           variant="ghost"
           size="sm"
-          className="w-full justify-start rounded-xl px-2.5 py-2 text-sidebar-foreground/82 hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+          className="w-full justify-start rounded-xl px-2.5 py-2 text-sidebar-foreground/82 hover:bg-red-500/10 hover:text-red-500 transition-colors"
           onClick={async () => {
             await signOut();
             navigate("/");

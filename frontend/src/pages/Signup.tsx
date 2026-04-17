@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Home } from "lucide-react";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -30,7 +30,7 @@ export default function SignupPage() {
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -42,9 +42,12 @@ export default function SignupPage() {
     if (error) {
       toast({ title: "Signup failed", description: error.message, variant: "destructive" });
     } else {
+      if (data.session) {
+        await supabase.auth.signOut();
+      }
       toast({
         title: "Account created!",
-        description: "Check your email to verify your account, then log in.",
+        description: "Your account was created. Please log in with your email and password to continue.",
       });
       navigate("/login");
     }
@@ -54,9 +57,12 @@ export default function SignupPage() {
     <div className="min-h-screen flex bg-background">
       <div className="flex flex-1 items-center justify-center p-4 sm:p-6 lg:p-8">
         <div className="w-full max-w-md">
-          <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-8">
-            <ArrowLeft className="w-4 h-4" /> Back to home
-          </Link>
+          <Button asChild variant="outline" size="sm" className="mb-8 inline-flex">
+            <Link to="/">
+              <Home className="w-4 h-4" />
+              Home
+            </Link>
+          </Button>
 
           <div className="flex items-center gap-2 mb-2">
             <div className="w-9 h-9 rounded-lg bg-primary flex items-center justify-center">
@@ -152,7 +158,7 @@ export default function SignupPage() {
           <h2 className="text-3xl font-display font-bold text-primary-foreground mb-4">
             Start Free. Grow Big.
           </h2>
-          <p className="text-agri-green-200/70 text-lg">
+          <p className="text-yellow-400 text-lg font-medium">
             Every farmer starts with a free account. Upgrade anytime as your business grows.
           </p>
         </div>

@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const lastHandledAccessTokenRef = useRef<string | null>(null);
 
   const syncStoredRole = (userId: string, nextRole: AppRole, expiresAt?: string | null) => {
-    if (nextRole === "farmer_pro" || nextRole === "buyer_enterprise") {
+    if (nextRole === "farmer_pro" || nextRole === "company") {
       setStoredRole(userId, nextRole, { expiresAt: expiresAt ?? null });
       return;
     }

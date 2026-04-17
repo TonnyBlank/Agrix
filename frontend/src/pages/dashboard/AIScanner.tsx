@@ -20,6 +20,7 @@ type ScanResult = {
   description: string;
   treatment: string;
   organicAlternatives: string[];
+  fertilizerRecommendations: string[];
   prevention: string;
 };
 
@@ -525,6 +526,10 @@ function ScannerLab() {
         <ul>${result.organicAlternatives.map((item) => `<li>${item}</li>`).join("")}</ul>
       </div>
       <div class="section">
+        <h3>Fertilizer Recommendations</h3>
+        <ul>${result.fertilizerRecommendations?.map((item) => `<li>${item}</li>`).join("")}</ul>
+      </div>
+      <div class="section">
         <h3>Prevention Tips</h3>
         <ul>${preventionItems.map((item) => `<li>${item}.</li>`).join("")}</ul>
       </div>
@@ -750,6 +755,28 @@ function ScannerLab() {
                     </div>
                   </div>
 
+                  {result.fertilizerRecommendations && result.fertilizerRecommendations.length > 0 && (
+                    <div className="rounded-[1.25rem] border border-emerald-200/80 bg-white p-4 shadow-sm dark:border-emerald-500/30 dark:bg-background/70">
+                      <div className="flex items-center gap-3">
+                        <Leaf className="h-5 w-5 text-emerald-600" />
+                        <div>
+                          <h4 className="font-display text-lg font-bold text-foreground">Fertilizer Recommendations</h4>
+                          <p className="text-sm text-muted-foreground">
+                            Nutrient and soil advice to support crop recovery.
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-3">
+                        {result.fertilizerRecommendations.map((item) => (
+                          <div key={item} className="flex items-start gap-3">
+                            <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                            <p className="text-sm leading-7 text-foreground">{item}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="rounded-[1.25rem] border border-emerald-200/80 bg-white p-4 shadow-sm dark:border-emerald-500/30 dark:bg-background/70">
                     <div className="flex items-center gap-3">
                       <ShieldCheck className="h-5 w-5 text-emerald-600" />
@@ -845,7 +872,7 @@ function ScannerLab() {
 
 export default function AIScanner() {
   const { role } = useAuth();
-  const hasAccess = role === "farmer_pro" || role === "buyer_enterprise";
+  const hasAccess = role === "farmer_pro" || role === "company";
 
   return <DashboardShell title="AI Crop Scanner">{hasAccess ? <ScannerLab /> : <ProGate />}</DashboardShell>;
 }

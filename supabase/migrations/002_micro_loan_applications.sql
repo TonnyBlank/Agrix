@@ -1,7 +1,7 @@
 create table if not exists public.micro_loan_applications (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
-  applicant_role text not null check (applicant_role in ('farmer_pro', 'buyer_enterprise')),
+  applicant_role text not null check (applicant_role in ('farmer_pro', 'company')),
   product_type text not null check (product_type in ('seasonal_working_capital', 'equipment_top_up', 'buyer_contract_financing')),
   product_title text not null,
   requested_amount numeric(12,2) not null check (requested_amount > 0),

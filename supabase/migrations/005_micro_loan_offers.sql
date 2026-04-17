@@ -1,6 +1,6 @@
 create table if not exists public.micro_loan_offers (
   id uuid primary key default gen_random_uuid(),
-  applicant_role text not null check (applicant_role in ('farmer_pro', 'buyer_enterprise')),
+  applicant_role text not null check (applicant_role in ('farmer_pro', 'company')),
   product_type text not null check (product_type in ('seasonal_working_capital', 'equipment_top_up', 'buyer_contract_financing')),
   product_title text not null,
   max_amount numeric(12,2) not null check (max_amount > 0),

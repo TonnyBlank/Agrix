@@ -34,7 +34,7 @@ import { apiFetch } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 
-const enterpriseBenefits = [
+const companyBenefits = [
   "Portfolio-level credit review across multiple farms and suppliers",
   "Contract-backed disbursement planning for bulk procurement cycles",
   "Repayment visibility linked to orders, deliveries, and settlement status",
@@ -150,7 +150,7 @@ type FundingOption = {
   requiredDocuments: string[];
 };
 
-type BorrowerRole = Extract<Database["public"]["Enums"]["app_role"], "farmer_pro" | "buyer_enterprise">;
+type BorrowerRole = Extract<Database["public"]["Enums"]["app_role"], "farmer_pro" | "company">;
 type MicroLoanApplicationRow = Database["public"]["Tables"]["micro_loan_applications"]["Row"];
 type MicroLoanRepaymentRow = Database["public"]["Tables"]["micro_loan_repayments"]["Row"];
 type MicroLoanOfferRow = Database["public"]["Tables"]["micro_loan_offers"]["Row"];
@@ -658,8 +658,8 @@ function MicroLoansDashboard() {
   const { user, role, profile, refreshProfile } = useAuth();
   const { sellingOrders, buyingOrders, loading: ordersLoading, refetch: refetchOrders } = useOrders();
   const { verification, loading: verificationLoading, refetch: refetchVerification } = useIdVerification();
-  const hasAccess = isIsolated || role === "farmer_pro" || role === "buyer_enterprise";
-  const isEnterprise = role === "buyer_enterprise";
+  const hasAccess = isIsolated || role === "farmer_pro" || role === "company";
+  const isCompanyBorrower = role === "company";
   const canUseProduceRepayment = role === "farmer_pro";
   const loading = ordersLoading || verificationLoading;
   const [refreshing, setRefreshing] = useState(false);
@@ -698,7 +698,7 @@ function MicroLoansDashboard() {
     const now = new Date();
     const ninetyDaysAgo = new Date(now);
     ninetyDaysAgo.setDate(now.getDate() - 90);
-    const financingOrders = isEnterprise ? buyingOrders : sellingOrders;
+    const financingOrders = isCompanyBorrower ? buyingOrders : sellingOrders;
 
     const qualifiedOrders = financingOrders.filter((order) => {
       const createdAt = new Date(order.created_at);
@@ -733,10 +733,10 @@ function MicroLoansDashboard() {
     ];
 
     const allChecksMet = readinessChecks.every((check) => check.met);
-    const scoreMultiplier = isEnterprise ? 1.1 : 0.8;
+    const scoreMultiplier = isCompanyBorrower ? 1.1 : 0.8;
     const rawEligibleAmount = averageMonthlyRevenue * scoreMultiplier;
-    const minimumEligibleAmount = isEnterprise ? 25000 : 10000;
-    const maxEligibleAmount = isEnterprise ? 1200000 : 250000;
+    const minimumEligibleAmount = isCompanyBorrower ? 25000 : 10000;
+    const maxEligibleAmount = isCompanyBorrower ? 1200000 : 250000;
     const eligibleAmount = allChecksMet
       ? Math.max(minimumEligibleAmount, Math.min(maxEligibleAmount, Math.round(rawEligibleAmount / 1000) * 1000))
       : 0;
@@ -749,9 +749,9 @@ function MicroLoansDashboard() {
       missingRequirements: readinessChecks.filter((check) => !check.met),
       isEligible: hasAccess && allChecksMet,
       eligibleAmount,
-      nextReviewWindow: isEnterprise ? "Priority review within 24 hours" : "Standard review within 24-48 hours",
+      nextReviewWindow: isCompanyBorrower ? "Priority review within 24 hours" : "Standard review within 24-48 hours",
     };
-  }, [buyingOrders, hasAccess, isEnterprise, profile, sellingOrders, verification?.status]);
+  }, [buyingOrders, hasAccess, isCompanyBorrower, profile, sellingOrders, verification?.status]);
 
   const readinessScore = Math.round(
     (eligibility.readinessChecks.filter((item) => item.met).length / eligibility.readinessChecks.length) * 100,
@@ -771,7 +771,7 @@ function MicroLoansDashboard() {
     ? {
         title: "Upgrade required",
         amount: "Unlock on paid plan",
-        detail: "Upgrade to Farmer Pro or Buyer Enterprise to unlock live credit tracking and borrowing.",
+        detail: "Upgrade to Farmer Pro to unlock live credit tracking and borrowing.",
         tone: "amber",
       }
     : loading
@@ -904,7 +904,7 @@ function MicroLoansDashboard() {
       );
     } catch (error) {
       console.error("Failed to load loan offers from API, falling back to Supabase", error);
-      if (role !== "farmer_pro" && role !== "buyer_enterprise") {
+      if (role !== "farmer_pro" && role !== "company") {
         setLoanOffers([]);
       } else {
         try {
@@ -1357,8 +1357,8 @@ function MicroLoansDashboard() {
 
             <p className="text-sm leading-7 text-muted-foreground">
               {hasAccess
-                ? isEnterprise
-                  ? "Enterprise financing uses revenue history, readiness signals, and supply-side patterns to estimate credit capacity."
+                ? isCompanyBorrower
+                  ? "Your Pro financing estimate uses revenue history, readiness signals, and order patterns to estimate credit capacity."
                   : "Your financing estimate is driven by recent platform revenue and updates as more qualifying orders come in."
                 : "Upgrade your plan to unlock financing readiness tracking and live credit estimates from this dashboard."}
             </p>
@@ -1379,13 +1379,13 @@ function MicroLoansDashboard() {
               </div>
             )}
 
-            {isEnterprise && (
+            {isCompanyBorrower && (
               <div className="mt-4 rounded-[1rem] border border-border bg-background/70 p-3.5">
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Enterprise credit notes
+                  Company credit notes
                 </p>
                 <div className="mt-3 space-y-3">
-                  {enterpriseBenefits.map((benefit) => (
+                  {companyBenefits.map((benefit) => (
                     <div key={benefit} className="flex items-start gap-3 text-sm text-foreground">
                       <BadgeCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                       <span>{benefit}</span>
@@ -2261,7 +2261,7 @@ function MicroLoansDashboard() {
                   ? "Your outstanding loan balance will be automatically deducted from your future verified marketplace sales." 
                   : canUseProduceRepayment
                     ? "You will manually initiate repayments via M-Pesa push prompts."
-                    : "Buyer Enterprise loans currently repay through M-Pesa only."}
+                    : "This loan currently repays through M-Pesa only."}
               </p>
             </div>
 
@@ -2537,7 +2537,7 @@ export default function MicroLoans() {
   const [searchParams] = useSearchParams();
   const isIsolated = searchParams.get("isolated") === "true";
   const { role } = useAuth();
-  const hasAccess = isIsolated || role === "farmer_pro" || role === "buyer_enterprise";
+  const hasAccess = isIsolated || role === "farmer_pro" || role === "company";
 
   return <DashboardShell title="Micro Loans">{hasAccess ? <MicroLoansDashboard /> : <ProGate />}</DashboardShell>;
 }

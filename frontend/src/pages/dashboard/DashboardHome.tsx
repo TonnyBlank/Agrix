@@ -70,12 +70,7 @@ export default function DashboardHome() {
     "Farmer";
   const firstName = displayName.split(" ")[0];
 
-  const planLabel =
-    role === "buyer_enterprise"
-      ? "BUYER ENTERPRISE"
-      : role === "farmer_pro"
-        ? "FARMER PRO"
-        : "FARMER FREE";
+  const planLabel = role === "farmer_pro" || role === "company" ? "FARMER PRO" : "FARMER FREE";
 
   const metrics = useMemo(() => {
     const now = new Date();
@@ -122,62 +117,33 @@ export default function DashboardHome() {
           icon: CreditCard,
         };
 
-  const quickActions =
-    role === "buyer_enterprise"
-      ? [
-          {
-            title: "Browse Marketplace",
-            description: "Review farmers, supply locations, and active offers.",
-            href: "/dashboard/marketplace",
-            icon: ShoppingCart,
-          },
-          {
-            title: "Track Orders",
-            description: "Watch fulfillment and payment updates for current deals.",
-            href: "/dashboard/orders",
-            icon: TrendingUp,
-          },
-          {
-            title: "Message Farmers",
-            description: "Follow up on negotiations and contract conversations.",
-            href: "/dashboard/messages",
-            icon: MessageSquare,
-          },
-          {
-            title: "Plan Procurement",
-            description: "Use the calendar and timing tools before your next cycle.",
-            href: "/dashboard/calendar",
-            icon: CalendarDays,
-          },
-          financeQuickAction,
-        ]
-      : [
-          {
-            title: "Add New Listing",
-            description: "Publish fresh produce and update pricing for buyers.",
-            href: "/dashboard/products",
-            icon: Package,
-          },
-          {
-            title: "Scan Crop Health",
-            description: "Run a field check and review AI crop diagnostics.",
-            href: "/dashboard/ai-scanner",
-            icon: ScanLine,
-          },
-          {
-            title: "Plan This Week",
-            description: "Review planting dates, weather windows, and reminders.",
-            href: "/dashboard/calendar",
-            icon: CalendarDays,
-          },
-          {
-            title: "Reply to Buyers",
-            description: "Keep orders moving with fast message follow-up.",
-            href: "/dashboard/messages",
-            icon: MessageSquare,
-          },
-          financeQuickAction,
-        ];
+  const quickActions = [
+    {
+      title: "Add New Listing",
+      description: "Publish fresh produce and update pricing for buyers.",
+      href: "/dashboard/products",
+      icon: Package,
+    },
+    {
+      title: "Scan Crop Health",
+      description: "Run a field check and review AI crop diagnostics.",
+      href: "/dashboard/ai-scanner",
+      icon: ScanLine,
+    },
+    {
+      title: "Plan This Week",
+      description: "Review planting dates, weather windows, and reminders.",
+      href: "/dashboard/calendar",
+      icon: CalendarDays,
+    },
+    {
+      title: "Reply to Buyers",
+      description: "Keep orders moving with fast message follow-up.",
+      href: "/dashboard/messages",
+      icon: MessageSquare,
+    },
+    financeQuickAction,
+  ];
 
   const marketWatch = [
     {

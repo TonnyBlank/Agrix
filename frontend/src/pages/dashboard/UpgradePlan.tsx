@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import type { Database } from "@/integrations/supabase/types";
 
 import { motion } from "framer-motion";
-import { Check, Zap, Shield, Crown, Smartphone } from "lucide-react";
+import { Check, Zap, Crown, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -17,7 +17,7 @@ const plans = [
   {
     id: "farmer_free",
     name: "Farmer Free",
-    price: "$0",
+    price: "KES 0",
     period: "forever",
     description: "Start Smart, Grow Fast",
     features: [
@@ -36,7 +36,7 @@ const plans = [
   {
     id: "farmer_pro",
     name: "Farmer Pro",
-    price: "$10",
+    price: "KES 1,500",
     period: "/month",
     description: "Scale Your Farm, Maximize Profits",
     features: [
@@ -54,28 +54,6 @@ const plans = [
     ],
     icon: Crown,
     variant: "pro" as const,
-  },
-  {
-    id: "buyer_enterprise",
-    name: "Buyer Enterprise",
-    price: "$50",
-    period: "/month",
-    description: "Secure, Predictable Supply",
-    features: [
-      "Everything in Pro +",
-      "Bulk ordering system",
-      "Contract farming agreements",
-      "Predictive supply insights (AI)",
-      "Escrow & M-Pesa payments",
-      "Featured farmer matching",
-      "Smart warehouse integration",
-      "Procurement forecasting",
-      "Blockchain supply traceability",
-      "Exportable invoices & tax receipts",
-      "Multiple buyer accounts",
-    ],
-    icon: Shield,
-    variant: "enterprise" as const,
   },
 ];
 
@@ -112,11 +90,9 @@ export default function UpgradePlan() {
         icon: <Zap className="w-4 h-4" />,
       });
       navigate(
-        planId === "buyer_enterprise"
-          ? "/dashboard/enterprise"
-          : planId === "farmer_pro"
-            ? "/dashboard/pro"
-            : "/dashboard/free",
+        planId === "farmer_pro"
+          ? "/dashboard/pro"
+          : "/dashboard/free",
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not activate this plan.", {
@@ -134,11 +110,10 @@ export default function UpgradePlan() {
         <p className="text-muted-foreground text-sm mt-2">Unlock powerful features to grow your agricultural business</p>
       </div>
 
-      <div className="mx-auto grid max-w-5xl grid-cols-1 gap-5 md:grid-cols-3">
+      <div className="mx-auto grid max-w-4xl grid-cols-1 gap-5 md:grid-cols-2">
         {plans.map((plan, i) => {
           const isCurrent = plan.id === role;
           const isPro = plan.variant === "pro";
-          const isEnterprise = plan.variant === "enterprise";
 
           return (
             <motion.div
@@ -149,8 +124,6 @@ export default function UpgradePlan() {
               className={`relative flex flex-col rounded-[1.55rem] p-5 ${
                 isPro
                   ? "glass-obsidian glow-gold"
-                  : isEnterprise
-                  ? "glass-steel border-steel-500/20"
                   : "bento-card"
               }`}
             >
@@ -162,10 +135,10 @@ export default function UpgradePlan() {
 
               <div className="mb-4 flex items-center gap-3">
                 <div className={`flex h-9 w-9 items-center justify-center rounded-xl ${
-                  isPro ? "bg-gold-500/20" : isEnterprise ? "bg-steel-500/20" : "bg-primary/10"
+                  isPro ? "bg-gold-500/20" : "bg-primary/10"
                 }`}>
                   <plan.icon className={`h-4 w-4 ${
-                    isPro ? "text-gold-500" : isEnterprise ? "text-steel-400" : "text-primary"
+                    isPro ? "text-gold-500" : "text-primary"
                   }`} />
                 </div>
                 <div>
@@ -196,8 +169,6 @@ export default function UpgradePlan() {
                     ? "bg-muted text-muted-foreground cursor-default"
                     : isPro
                     ? "bg-gold-gradient text-foreground glow-gold"
-                    : isEnterprise
-                    ? "bg-steel-gradient text-primary-foreground"
                     : "bg-primary text-primary-foreground"
                 }`}
               >

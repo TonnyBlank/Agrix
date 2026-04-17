@@ -128,12 +128,15 @@ export async function apiFetch<T>(
 
   if (!response.ok) {
     let message = `Request failed with status ${response.status}`;
-    try {
-      const errorPayload = await response.json();
-      message = errorPayload.error || errorPayload.message || message;
-    } catch {
-      const text = await response.text();
-      if (text) message = text;
+    const rawText = await response.text();
+
+    if (rawText) {
+      try {
+        const errorPayload = JSON.parse(rawText);
+        message = errorPayload.error || errorPayload.message || message;
+      } catch {
+        message = rawText;
+      }
     }
 
     if (response.status === 401) {

@@ -22,7 +22,7 @@ export default function CTASection() {
             <br />
             Agriculture Starts <span className="text-gradient-gold">Now</span>
           </h2>
-          <p className="text-agri-green-200/80 text-lg md:text-xl max-w-2xl mx-auto mb-10">
+          <p className="text-gradient-gold text-lg md:text-xl max-w-2xl mx-auto mb-10">
             Join 10,000+ farmers and buyers already transforming how food moves from
             farm to table across Kenya.
           </p>
@@ -34,8 +34,8 @@ export default function CTASection() {
               </Link>
             </Button>
             <Button asChild size="lg" className="h-14 px-10 text-base font-semibold text-white hover:bg-[#0b4a24] bg-[#0f5c2e]">
-              <a href="#buyer-enterprise">
-                Buyer Enterprise
+              <a href="#pricing">
+                View Pricing
                 <ArrowRight className="ml-2 h-5 w-5" />
               </a>
             </Button>

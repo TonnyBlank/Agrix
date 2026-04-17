@@ -47,8 +47,8 @@ export default function Navbar() {
           <Button variant="ghost" size="sm" asChild>
             <Link to="/login">Sign In</Link>
           </Button>
-          <Button size="sm" asChild>
-            <Link to="/signup">Get Early Access</Link>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/company-register">Join as Company</Link>
           </Button>
         </div>
 
@@ -79,13 +79,15 @@ export default function Navbar() {
                   {link.label}
                 </a>
               ))}
-              <div className="flex gap-3 pt-2">
-                <Button variant="ghost" size="sm" className="flex-1" asChild>
+              <div className="flex flex-col gap-3 pt-2">
+                <Button variant="ghost" size="sm" className="w-full" asChild>
                   <Link to="/login">Sign In</Link>
                 </Button>
-                <Button size="sm" className="flex-1" asChild>
-                  <Link to="/signup">Get Early Access</Link>
-                </Button>
+                <div className="flex gap-3">
+                  <Button variant="outline" size="sm" className="w-full" asChild>
+                    <Link to="/company-register">Company</Link>
+                  </Button>
+                </div>
               </div>
             </div>
           </motion.div>

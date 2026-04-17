@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2, Edit3, MapPin, Package, Ruler, Shield, Sprout, Tractor, Trees, Video, Wheat } from "lucide-react";
+import { CheckCircle2, Crosshair, Edit3, MapPin, Package, Ruler, Shield, Sprout, Tractor, Trees, Video, Wheat } from "lucide-react";
 
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import FarmMap from "@/components/dashboard/FarmMap";
@@ -52,11 +52,18 @@ function formatStoredLabel(value: string | null | undefined) {
     .join(" ");
 }
 
+function parseCoordinateValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export default function MyFarm() {
   const { profile, applyProfileUpdate } = useAuth();
   const { products } = useMyProducts();
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isCapturingGps, setIsCapturingGps] = useState(false);
   const [subCounty, setSubCounty] = useState<string>(() => localStorage.getItem("farm_sub_county") || "");
   const [formData, setFormData] = useState({
     county: "",
@@ -72,8 +79,20 @@ export default function MyFarm() {
     cooperative_name: "",
     has_storage: false,
     has_transport: false,
+    farm_gps_lat: "",
+    farm_gps_lng: "",
   });
   const bioCharacterLimit = 50;
+  const savedFarmCoordinates = useMemo(() => {
+    const lat = parseCoordinateValue(profile?.farm_gps_lat);
+    const lng = parseCoordinateValue(profile?.farm_gps_lng);
+    return lat === null || lng === null ? null : { lat, lng };
+  }, [profile?.farm_gps_lat, profile?.farm_gps_lng]);
+  const editFarmCoordinates = useMemo(() => {
+    const lat = parseCoordinateValue(formData.farm_gps_lat);
+    const lng = parseCoordinateValue(formData.farm_gps_lng);
+    return lat === null || lng === null ? null : { lat, lng };
+  }, [formData.farm_gps_lat, formData.farm_gps_lng]);
 
   const profileCompletion = useMemo(() => {
     const checks = {
@@ -253,6 +272,11 @@ export default function MyFarm() {
         value: subCounty || "Not set",
       },
       {
+        key: "gps",
+        label: "Farm GPS",
+        value: savedFarmCoordinates ? `${savedFarmCoordinates.lat.toFixed(5)}, ${savedFarmCoordinates.lng.toFixed(5)}` : "Not set",
+      },
+      {
         key: "farm_size",
         label: "Farm size",
         value: profile?.farm_size || "Not set",
@@ -268,7 +292,7 @@ export default function MyFarm() {
         value: formatStoredLabel(profile?.irrigation_type),
       },
     ],
-    [profile, resolvedCounty, subCounty],
+    [profile, resolvedCounty, savedFarmCoordinates, subCounty],
   );
 
   const handleEdit = () => {
@@ -289,8 +313,46 @@ export default function MyFarm() {
       cooperative_name: profile?.cooperative_name || "",
       has_storage: Boolean(profile?.has_storage),
       has_transport: Boolean(profile?.has_transport),
+      farm_gps_lat: profile?.farm_gps_lat !== null && profile?.farm_gps_lat !== undefined ? String(profile.farm_gps_lat) : "",
+      farm_gps_lng: profile?.farm_gps_lng !== null && profile?.farm_gps_lng !== undefined ? String(profile.farm_gps_lng) : "",
     });
     setIsEditOpen(true);
+  };
+
+  const updateFarmCoordinates = (coordinates: { lat: number; lng: number }) => {
+    setFormData((current) => ({
+      ...current,
+      farm_gps_lat: coordinates.lat.toFixed(6),
+      farm_gps_lng: coordinates.lng.toFixed(6),
+    }));
+  };
+
+  const handleCaptureGps = () => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      toast.error("GPS is not supported on this device or browser.");
+      return;
+    }
+
+    setIsCapturingGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        updateFarmCoordinates({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+        });
+        setIsCapturingGps(false);
+        toast.success("Live farm GPS captured. Save changes to record it.");
+      },
+      (error) => {
+        setIsCapturingGps(false);
+        toast.error(error.message || "Unable to capture your current location.");
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      },
+    );
   };
 
   const handleSave = async () => {
@@ -298,6 +360,8 @@ export default function MyFarm() {
     const normalizedSubCounty = formData.sub_county.trim();
     const normalizedCounty = findCountyOption(formData.county) || formData.county.trim() || findCountyForSubCounty(normalizedSubCounty) || "";
     const normalizedYears = formData.years_farming.trim();
+    const normalizedGpsLat = parseCoordinateValue(formData.farm_gps_lat);
+    const normalizedGpsLng = parseCoordinateValue(formData.farm_gps_lng);
 
     localStorage.setItem("farm_sub_county", normalizedSubCounty);
     setSubCounty(normalizedSubCounty);
@@ -315,6 +379,12 @@ export default function MyFarm() {
         setIsSaving(false);
         return;
       }
+    }
+
+    if (normalizedGpsLat === null || normalizedGpsLng === null) {
+      toast.error("Capture the real farm GPS location before saving.");
+      setIsSaving(false);
+      return;
     }
 
     try {
@@ -341,6 +411,8 @@ export default function MyFarm() {
           cooperative_name: formData.cooperative_name.trim() || null,
           has_storage: formData.has_storage,
           has_transport: formData.has_transport,
+          farm_gps_lat: normalizedGpsLat,
+          farm_gps_lng: normalizedGpsLng,
         } as unknown as BodyInit,
       });
 
@@ -427,6 +499,7 @@ export default function MyFarm() {
               <FarmMap
                 location={resolvedCounty}
                 subCounty={subCounty}
+                coordinates={savedFarmCoordinates}
                 heightClassName="h-[280px] sm:h-[320px] lg:h-[360px]"
               />
 
@@ -755,6 +828,67 @@ export default function MyFarm() {
                     : "Choose a county first to load its sub-counties."}
                 </p>
               </div>
+            </div>
+
+            <div className="space-y-3 rounded-[1.4rem] border border-emerald-200/80 bg-emerald-50/70 p-4 dark:border-emerald-500/25 dark:bg-emerald-500/10">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300">Farm GPS Verification</p>
+                <p className="text-sm text-muted-foreground">
+                  Stand on the farm, tap the GPS button, or click the map to record the real farm location before saving.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button type="button" onClick={handleCaptureGps} disabled={isCapturingGps} className="rounded-xl bg-emerald-600 text-white hover:bg-emerald-700">
+                  <Crosshair className="mr-2 h-4 w-4" />
+                  {isCapturingGps ? "Capturing GPS..." : "Use My Current GPS"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setFormData((current) => ({ ...current, farm_gps_lat: "", farm_gps_lng: "" }))}
+                  className="rounded-xl"
+                >
+                  Clear GPS
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="farm_gps_lat">Latitude</Label>
+                  <Input
+                    id="farm_gps_lat"
+                    value={formData.farm_gps_lat}
+                    onChange={(event) => setFormData((current) => ({ ...current, farm_gps_lat: event.target.value }))}
+                    placeholder="-0.123456"
+                    className="rounded-xl"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="farm_gps_lng">Longitude</Label>
+                  <Input
+                    id="farm_gps_lng"
+                    value={formData.farm_gps_lng}
+                    onChange={(event) => setFormData((current) => ({ ...current, farm_gps_lng: event.target.value }))}
+                    placeholder="36.123456"
+                    className="rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-[1.25rem]">
+                <FarmMap
+                  location={formData.county || resolvedCounty}
+                  subCounty={formData.sub_county || subCounty}
+                  coordinates={editFarmCoordinates}
+                  editable
+                  onSelectCoordinates={updateFarmCoordinates}
+                  heightClassName="h-[240px]"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                The marker follows your saved GPS point. If GPS misses the exact spot, click the map at the farm to correct it.
+              </p>
             </div>
 
             <div className="space-y-2">

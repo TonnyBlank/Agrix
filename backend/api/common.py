@@ -13,8 +13,8 @@ import requests
 
 from .http import HttpRequest, HttpResponse, JsonResponse
 
-APP_ROLES = ("farmer_free", "farmer_pro", "buyer_enterprise", "admin")
-PAID_APP_ROLES = ("farmer_pro", "buyer_enterprise")
+APP_ROLES = ("farmer_free", "farmer_pro", "company", "admin")
+PAID_APP_ROLES = ("farmer_pro", "company")
 PLAN_DURATION_DAYS = 30
 LOAN_PRODUCT_TYPES = (
     "seasonal_working_capital",

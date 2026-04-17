@@ -183,7 +183,7 @@ def serialize_loan_application(loan: dict[str, Any], repayments: list[dict[str, 
 
 
 def get_eligibility_order_field(role: str) -> str:
-    return "buyer_id" if role == "buyer_enterprise" else "farmer_id"
+    return "buyer_id" if role == "company" else "farmer_id"
 
 
 def fetch_eligibility_orders(client, role: str, user_id: str) -> list[dict[str, Any]]:
@@ -221,10 +221,10 @@ def compute_loan_eligibility(role: str, profile: dict[str, Any] | None, verifica
         revenue_90 >= 10000,
     ]
     all_checks = all(checks)
-    score_multiplier = 1.1 if role == "buyer_enterprise" else 0.8
+    score_multiplier = 1.1 if role == "company" else 0.8
     raw_eligible_amount = average_monthly_revenue * score_multiplier
-    minimum = 25000 if role == "buyer_enterprise" else 10000
-    maximum = 1200000 if role == "buyer_enterprise" else 250000
+    minimum = 25000 if role == "company" else 10000
+    maximum = 1200000 if role == "company" else 250000
     eligible_amount = max(minimum, min(maximum, round(raw_eligible_amount / 1000) * 1000)) if all_checks else 0
     return {
         "isEligible": all_checks and eligible_amount > 0,
@@ -271,7 +271,7 @@ def micro_loan_offers(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
     role = resolve_app_role(request.supabase, request.user_id, request.requested_role)
-    if role not in {"farmer_pro", "buyer_enterprise"}:
+    if role not in {"farmer_pro", "company"}:
         return JsonResponse([], safe=False)
     offers, _ = request.supabase.select("micro_loan_offers", filters={"is_active": "eq.true", "applicant_role": f"eq.{role}"}, order="created_at.desc")
     profile, _ = request.supabase.select(
@@ -313,7 +313,7 @@ def micro_loan_applications(request: HttpRequest):
         return method_not_allowed(["GET", "POST"])
     body = parse_json_body(request)
     role = resolve_app_role(request.supabase, request.user_id, request.requested_role)
-    if role not in {"farmer_pro", "buyer_enterprise"}:
+    if role not in {"farmer_pro", "company"}:
         raise ApiException("Upgrade required before borrowing.", 403)
     try:
         requested_amount = float(body.get("requestedAmount"))
@@ -360,12 +360,12 @@ def micro_loan_applications(request: HttpRequest):
         config = PRODUCT_CONFIG[product_type]
         selected_product_type = product_type
         product_title = config["title"]
-        speed = config["speedEnterprise"] if role == "buyer_enterprise" else config["speedFarmer"]
-        interest_rate = config["interestEnterprise"] if role == "buyer_enterprise" else config["interestFarmer"]
-        repayment_days = config["repaymentDaysEnterprise"] if role == "buyer_enterprise" else config["repaymentDaysFarmer"]
+        speed = config["speedEnterprise"] if role == "company" else config["speedFarmer"]
+        interest_rate = config["interestEnterprise"] if role == "company" else config["interestFarmer"]
+        repayment_days = config["repaymentDaysEnterprise"] if role == "company" else config["repaymentDaysFarmer"]
         max_allowed = max(
             available_amount * config["multiplier"],
-            config["enterpriseMinimum"] if role == "buyer_enterprise" else config["farmerMinimum"],
+            config["enterpriseMinimum"] if role == "company" else config["farmerMinimum"],
         )
         security_type = "unsecured"
         requires_branch_visit = False

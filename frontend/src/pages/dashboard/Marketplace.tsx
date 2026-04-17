@@ -281,11 +281,6 @@ export default function Marketplace() {
               </div>
             </div>
 
-            {!viewerCounty && (
-              <Button asChild variant="outline" className="rounded-2xl border-emerald-200 bg-white/85 shadow-sm dark:border-emerald-500/20 dark:bg-background/70">
-                <Link to="/dashboard/farm">Set Farm Location</Link>
-              </Button>
-            )}
           </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">

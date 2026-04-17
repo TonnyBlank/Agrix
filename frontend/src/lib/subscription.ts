@@ -22,7 +22,7 @@ function getStorageKey(userId: string) {
 }
 
 function isPaidRole(role: AppRole) {
-  return role === "farmer_pro" || role === "buyer_enterprise";
+  return role === "farmer_pro" || role === "company";
 }
 
 export function getStoredRole(userId: string): AppRole | null {

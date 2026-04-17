@@ -78,8 +78,8 @@ async function hydrateOrders(rows: OrderRow[]) {
 
 async function loadOrdersFromSupabase(userId: string) {
   const [{ data: sellingRows, error: sellingError }, { data: buyingRows, error: buyingError }] = await Promise.all([
-    supabase.from("orders").select("*").eq("farmer_id", userId).order("created_at", { ascending: false }),
-    supabase.from("orders").select("*").eq("buyer_id", userId).order("created_at", { ascending: false }),
+    supabase.from("orders").select("*").eq("farmer_id", userId).neq("payment_status", "failed").order("created_at", { ascending: false }),
+    supabase.from("orders").select("*").eq("buyer_id", userId).neq("payment_status", "failed").order("created_at", { ascending: false }),
   ]);
 
   if (sellingError) throw sellingError;

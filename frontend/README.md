@@ -1,54 +1,128 @@
 # AgriLink X Frontend
 
-The frontend for AgriLink X is built with React, Vite, and Tailwind CSS, featuring a premium design system called **"Forest Glass"**.
+The frontend is a React + Vite application for farmers, companies, buyers, and admins. It powers the public landing experience and the authenticated dashboard flows.
 
-## 🛠 Tech Stack
+## Stack
 
-- **Framework**: [React](https://reactjs.org/) + [Vite](https://vitejs.dev/)
-- **Styling**: [Tailwind CSS](https://tailwindcss.com/)
-- **UI Components**: [Shadcn UI](https://ui.shadcn.com/) (Radix UI)
-- **State Management**: [TanStack Query](https://tanstack.com/query/latest) (React Query)
-- **Routing**: [React Router v6](https://reactrouter.com/)
-- **State/Auth Hooks**: Custom hooks for Supabase integration.
-- **Icons**: [Lucide React](https://lucide.dev/)
-- **Animations**: [Framer Motion](https://www.framer.com/motion/)
+- React 18
+- Vite
+- TypeScript
+- Tailwind CSS
+- shadcn/ui and Radix UI
+- Framer Motion
+- React Router
+- TanStack Query
+- React Leaflet
+- Supabase JS
 
-## 🚀 Getting Started
+## Main Frontend Areas
 
-### 1. Install Dependencies
+- landing pages and authentication
+- farmer dashboard flows:
+  - my farm
+  - marketplace
+  - crop scanner
+  - products
+  - orders
+  - messages
+  - micro-loans
+- company dashboard flows:
+  - company hub
+  - products
+  - partners
+  - procurement
+  - orders
+  - settings
+- admin flows:
+  - users
+  - company verification
+  - loans and decisions
+
+## Notable UX Features
+
+- premium "Forest Glass" dashboard styling
+- role-aware dashboard routing
+- real farm GPS capture on `My Farm`
+- map display with saved farm coordinates
+- company command-center dashboard layout
+- responsive layouts for desktop and mobile
+
+## Setup
+
 ```bash
+cd frontend
 npm install
+cp .env.example .env
 ```
 
-### 2. Configure Environment Variables
-Create a `.env` file in the `frontend/` directory (use `.env.example` as a template):
+## Environment Variables
+
+At minimum:
+
 ```text
 VITE_SUPABASE_URL=your-supabase-url
 VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
 
-### 3. Run Development Server
+Optional:
+
+```text
+VITE_API_URL=http://127.0.0.1:3001/api
+```
+
+If `VITE_API_URL` is not set, the app auto-resolves the backend during local development.
+
+## Run Locally
+
 ```bash
 npm run dev
 ```
-The app will be available at `http://localhost:8080`.
 
-## 📂 Key Directories
+Default dev URL:
 
-- `src/components/`: Reusable UI components, layout shells, and dashboard features.
-- `src/pages/`: Main application pages (Dashboard, Marketplace, AI Scanner, etc.).
-- `src/hooks/`: Custom React hooks for authentication, data fetching, and more.
-- `src/lib/`: Utility functions and third-party configurations.
-- `src/types/`: TypeScript definitions for the project's data models.
+```text
+http://localhost:8080
+```
 
-## 🎨 Design System
+## Scripts
 
-AgriLink X uses a custom theme configured in `tailwind.config.ts`.
-- **Primary Color**: Emerald-500 (#10b981)
-- **Secondary Color**: Gold-gradient for premium features.
-- **Typography**: Display fonts for headers and sans-serif for readability.
-- **Glassmorphism**: Subtle backdrops and blurs used in dashboard cards.
+```bash
+npm run dev
+npm run build
+npm run preview
+npm run test
+npm run test:watch
+npm run lint
+```
 
----
+## Project Structure
 
-For overall project documentation, see the [Root README](../README.md).
+- `src/pages/`: route-level pages
+- `src/components/`: reusable UI and dashboard blocks
+- `src/hooks/`: feature and auth hooks
+- `src/lib/`: API helpers, utilities, and configuration
+- `src/integrations/supabase/`: generated Supabase types and client
+- `public/`: static assets
+
+## Development Notes
+
+- The API helper targets the Django backend on port `3001` during local dev
+- Company pages expect the company schema and procurement schema to exist in Supabase
+- The `My Farm` page stores farm GPS coordinates in the user profile when available
+- The map view prefers saved GPS coordinates over plain county geocoding
+
+## Verification
+
+Build the frontend:
+
+```bash
+npm run build
+```
+
+Run tests:
+
+```bash
+npm run test
+```
+
+For overall project documentation, see the [root README](../README.md).

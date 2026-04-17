@@ -48,9 +48,9 @@ export default function HeroSection() {
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.2 }}
-            className="text-lg md:text-xl text-agri-green-200/80 max-w-xl mb-10 leading-relaxed"
+            className="text-lg md:text-xl text-agri-green-200/80 max-w-2xl mb-10 leading-relaxed"
           >
-            AgriLink X is an integrated agricultural ecosystem that unifies a digital marketplace, flexible micro-financing, and advanced farm management solutions, enabling secure transactions, direct access to verified buyers, and scalable profitability.
+            AgriLink X is an integrated agricultural ecosystem connecting farmers, buyers, and agri-companies in a unified digital marketplace. We deliver flexible micro-financing, advanced farm management, and seamless B2B networking to ensure secure transactions, reliable sourcing, and scalable profitability.
           </motion.p>
 
           <motion.div

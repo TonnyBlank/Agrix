@@ -46,7 +46,7 @@ def admin_overview(request: HttpRequest):
     admin = admin_client()
     _, users_count = admin.select("profiles", select="user_id", head=True, count="exact")
     _, products_count = admin.select("products", select="id", head=True, count="exact")
-    _, orders_count = admin.select("orders", select="id", head=True, count="exact")
+    _, orders_count = admin.select("orders", select="id", filters={"payment_status": "neq.failed"}, head=True, count="exact")
     _, loans_count = admin.select("micro_loan_applications", select="id", head=True, count="exact")
     _, pending_loans_count = admin.select("micro_loan_applications", select="id", filters={"status": "eq.pending_review"}, head=True, count="exact")
     _, pending_verifications_count = admin.select("id_verifications", select="id", filters={"status": 'in.("pending_review","unverified")'}, head=True, count="exact")
@@ -74,7 +74,12 @@ def admin_analytics(request: HttpRequest):
         return method_not_allowed(["GET"])
     ensure_admin(request)
     admin = admin_client()
-    orders, _ = admin.select("orders", select="id, product_id, quantity, total_price, status, payment_status, created_at", order="created_at.asc")
+    orders, _ = admin.select(
+        "orders",
+        select="id, product_id, quantity, total_price, status, payment_status, created_at",
+        filters={"payment_status": "neq.failed"},
+        order="created_at.asc",
+    )
     product_ids = sorted({order["product_id"] for order in orders or []})
     products, _ = admin.select("products", select="id, name, category", filters={"id": f"in.{postgrest_in(product_ids)}"} if product_ids else {})
     products_by_id = {product["id"]: product for product in products or []}
@@ -133,7 +138,7 @@ def admin_user_role(request: HttpRequest, user_id: str):
         return method_not_allowed(["PATCH"])
     ensure_admin(request)
     next_role = parse_json_body(request).get("role")
-    if next_role not in {"farmer_free", "farmer_pro", "buyer_enterprise", "admin"}:
+    if next_role not in {"farmer_free", "farmer_pro", "company", "admin"}:
         raise ApiException("Invalid role", 400)
     updated_profile = set_user_role_with_plan(user_id, next_role)
     return JsonResponse(
@@ -152,7 +157,7 @@ def admin_orders(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
     ensure_admin(request)
-    orders, _ = admin_client().select("orders", order="created_at.desc", limit=100)
+    orders, _ = admin_client().select("orders", filters={"payment_status": "neq.failed"}, order="created_at.desc", limit=100)
     return JsonResponse(attach_order_meta(admin_client(), orders or []), safe=False)
 
 
@@ -163,10 +168,14 @@ def admin_loan_candidates(request: HttpRequest):
         return method_not_allowed(["GET"])
     ensure_admin(request)
     admin = admin_client()
-    roles, _ = admin.select("user_roles", select="user_id, role", filters={"role": 'in.("farmer_pro","buyer_enterprise")'})
+    roles, _ = admin.select("user_roles", select="user_id, role", filters={"role": 'in.("farmer_pro","company")'})
     profiles, _ = admin.select("profiles", select="user_id, full_name, county, phone, payout_method, payout_mpesa_number, bank_name, bank_account_name, bank_account_number")
     verifications, _ = admin.select("id_verifications", select="user_id, status")
-    orders, _ = admin.select("orders", select="farmer_id, buyer_id, total_price, created_at, status, payment_status")
+    orders, _ = admin.select(
+        "orders",
+        select="farmer_id, buyer_id, total_price, created_at, status, payment_status",
+        filters={"payment_status": "neq.failed"},
+    )
     role_by_id = {item["user_id"]: item["role"] for item in roles or []}
     qualified_ids = set(role_by_id)
     verification_by_id = {item["user_id"]: item["status"] for item in verifications or []}
@@ -176,7 +185,7 @@ def admin_loan_candidates(request: HttpRequest):
         buyer_id = order.get("buyer_id")
         if farmer_id in qualified_ids and role_by_id.get(farmer_id) == "farmer_pro":
             orders_by_user.setdefault(farmer_id, []).append(order)
-        if buyer_id in qualified_ids and role_by_id.get(buyer_id) == "buyer_enterprise":
+        if buyer_id in qualified_ids and role_by_id.get(buyer_id) == "company":
             orders_by_user.setdefault(buyer_id, []).append(order)
     rows = []
     for profile in profiles or []:
@@ -217,8 +226,8 @@ def admin_loan_offers(request: HttpRequest):
     if request.method != "POST":
         return method_not_allowed(["GET", "POST"])
     body = parse_json_body(request)
-    if body.get("applicant_role") not in {"farmer_pro", "buyer_enterprise"}:
-        raise ApiException("Applicant role must be farmer_pro or buyer_enterprise.", 400)
+    if body.get("applicant_role") not in {"farmer_pro", "company"}:
+        raise ApiException("Applicant role must be farmer_pro or company.", 400)
     if body.get("product_type") not in LOAN_PRODUCT_TYPES:
         raise ApiException("Select a valid loan product type.", 400)
     if not str(body.get("product_title") or "").strip():
@@ -347,8 +356,8 @@ def admin_loans(request: HttpRequest):
     body = parse_json_body(request)
     if not str(body.get("user_id") or "").strip():
         raise ApiException("A valid borrower user ID is required.", 400)
-    if body.get("applicant_role") not in {"farmer_pro", "buyer_enterprise"}:
-        raise ApiException("Applicant role must be farmer_pro or buyer_enterprise.", 400)
+    if body.get("applicant_role") not in {"farmer_pro", "company"}:
+        raise ApiException("Applicant role must be farmer_pro or company.", 400)
     if body.get("product_type") not in LOAN_PRODUCT_TYPES:
         raise ApiException("Select a valid loan product type.", 400)
     if not str(body.get("product_title") or "").strip():

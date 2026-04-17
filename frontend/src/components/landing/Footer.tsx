@@ -2,90 +2,127 @@ import BrandWordmark from "@/components/branding/BrandWordmark";
 import { Link } from "react-router-dom";
 
 const links = {
-  Product: [
-    { name: "Features", href: "#features" },
-    { name: "Pricing", href: "#pricing" },
-    { name: "Mobile App", href: "#" },
+  Platform: [
+    { name: "Marketplace", href: "/login" },
+    { name: "Farmer Signup", href: "/signup" },
+    { name: "Company Signup", href: "/company-register" },
+    { name: "Community", href: "/login" },
   ],
   Company: [
     { name: "About", href: "/about" },
-    { name: "Careers", href: "#" },
-    { name: "Blog", href: "#" },
-    { name: "Press", href: "#" },
+    { name: "Why AgriLink X", href: "/about" },
+    { name: "Partner With Us", href: "mailto:officialagrilinkx@gmail.com?subject=Partnership%20Request" },
+    { name: "Contact Team", href: "mailto:officialagrilinkx@gmail.com" },
   ],
   Resources: [
-    { name: "Documentation", href: "#" },
-    { name: "Help Center", href: "#" },
-    { name: "Community", href: "/dashboard/community" },
-    { name: "Partners", href: "#" },
+    { name: "Get Started", href: "/signup" },
+    { name: "Company Onboarding", href: "/company-register" },
+    { name: "Login", href: "/login" },
+    { name: "Help & Support", href: "mailto:officialagrilinkx@gmail.com?subject=Support%20Request" },
   ],
   Legal: [
-    { name: "Privacy", href: "#" },
-    { name: "Terms", href: "#" },
-    { name: "Cookie Policy", href: "#" },
+    { name: "Privacy Request", href: "mailto:officialagrilinkx@gmail.com?subject=Privacy%20Request" },
+    { name: "Terms Enquiry", href: "mailto:officialagrilinkx@gmail.com?subject=Terms%20Enquiry" },
+    { name: "Cookies & Data", href: "mailto:officialagrilinkx@gmail.com?subject=Cookie%20Policy%20Request" },
   ],
 };
 
+const socialLinks = [
+  { name: "Twitter", href: "https://twitter.com/AgriLinkX" },
+  { name: "LinkedIn", href: "https://linkedin.com/company/agrilinkx" },
+  { name: "Instagram", href: "https://instagram.com/agrilinkx" },
+];
+
 export default function Footer() {
+  const year = new Date().getFullYear();
+
   return (
-    <footer className="bg-foreground text-primary-foreground py-16">
-      <div className="container">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-8 mb-12">
-          <div className="col-span-2 md:col-span-1">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-                <span className="text-primary-foreground font-display font-bold">A</span>
+    <footer className="w-full bg-foreground text-primary-foreground border-t border-primary-foreground/10 relative overflow-hidden">
+      {/* Background ambient light */}
+      <div className="absolute top-0 left-1/2 -translate-x-1/2 h-px w-[80%] bg-gradient-to-r from-transparent via-primary/30 to-transparent" />
+
+      <div className="container px-6 py-16 md:px-8 lg:py-20 lg:pt-24">
+        <div className="grid grid-cols-1 gap-12 lg:grid-cols-6 lg:gap-8">
+
+          {/* Brand Info */}
+          <div className="lg:col-span-2 pr-4 md:pr-12">
+            <div className="mb-6 flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary shadow-glow-emerald">
+                <span className="font-display text-lg font-bold text-primary-foreground">A</span>
               </div>
-              <BrandWordmark className="text-lg text-primary-foreground" />
+              <BrandWordmark className="text-xl text-primary-foreground" />
             </div>
-            <p className="text-sm text-primary-foreground/60 leading-relaxed mb-6">
-              The intelligent agricultural commerce platform connecting Africa's farmers to global markets.
+            <p className="mb-8 max-w-sm text-sm leading-relaxed text-primary-foreground/70">
+              AgriLink X helps farmers, buyers, and agricultural companies move from scattered conversations to clear trade, trusted partnerships, and faster growth.
             </p>
-            <div className="space-y-3">
-              <a href="mailto:officialagrilinkx@gmail.com" className="flex items-center gap-2 text-sm text-primary-foreground/50 hover:text-primary-foreground/80 transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                officialagrilinkx@gmail.com
-              </a>
-              <a href="tel:0793900080" className="flex items-center gap-2 text-sm text-primary-foreground/50 hover:text-primary-foreground/80 transition-colors">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
-                0793 900 080
-              </a>
+            <div className="flex flex-col gap-3 text-sm text-primary-foreground/70">
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-foreground/5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></svg>
+                </span>
+                <a href="mailto:officialagrilinkx@gmail.com" className="transition-colors hover:text-primary break-all">
+                  officialagrilinkx@gmail.com
+                </a>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-foreground/5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></svg>
+                </span>
+                <a href="tel:0793900080" className="transition-colors hover:text-primary">
+                  0793 900 080
+                </a>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-foreground/5">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z" /><circle cx="12" cy="10" r="3" /></svg>
+                </span>
+                <p>Kakamega, Kenya</p>
+              </div>
             </div>
           </div>
-          {Object.entries(links).map(([category, items]) => (
-            <div key={category}>
-              <h4 className="font-display font-semibold text-sm mb-4">{category}</h4>
-              <ul className="space-y-2">
-                {items.map((item) => (
-                  <li key={item.name}>
-                    {item.href.startsWith('#') || item.href.startsWith('http') ? (
-                      <a href={item.href} className="text-sm text-primary-foreground/50 hover:text-primary-foreground/80 transition-colors">
-                        {item.name}
-                      </a>
-                    ) : (
-                      <Link to={item.href} className="text-sm text-primary-foreground/50 hover:text-primary-foreground/80 transition-colors">
-                        {item.name}
-                      </Link>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+
+          {/* Links */}
+          <div className="grid grid-cols-2 gap-x-8 gap-y-12 sm:grid-cols-4 lg:col-span-4 mt-8 lg:mt-0">
+            {Object.entries(links).map(([category, items]) => (
+              <div key={category}>
+                <h4 className="mb-6 font-display text-sm font-semibold tracking-widest uppercase text-primary-foreground">{category}</h4>
+                <ul className="space-y-4">
+                  {items.map((item) => (
+                    <li key={item.name}>
+                      {item.href.startsWith("http") || item.href.startsWith("mailto:") ? (
+                        <a href={item.href} className="text-sm font-medium text-primary-foreground/55 transition-all hover:text-primary hover:translate-x-1 inline-block">
+                          {item.name}
+                        </a>
+                      ) : (
+                        <Link to={item.href} className="text-sm font-medium text-primary-foreground/55 transition-all hover:text-primary hover:translate-x-1 inline-block">
+                          {item.name}
+                        </Link>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="border-t border-primary-foreground/10 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-primary-foreground/40">
-            Copyright 2026 AgriLink X. All rights reserved. Made with tonny in Kakamega
+
+        {/* Bottom Section */}
+        <div className="mt-20 flex flex-col items-center justify-between gap-6 border-t border-primary-foreground/10 pt-8 md:flex-row">
+          <p className="text-sm text-primary-foreground/45 text-center md:text-left">
+            © {year} AgriLink X. Built in Kakamega, Kenya for a smarter agricultural economy.
           </p>
-        
-          <div className="flex gap-6">
-            {[
-              { name: "Twitter", href: "https://twitter.com/AgriLinkX" },
-              { name: "LinkedIn", href: "https://linkedin.com/company/agrilinkx" },
-              { name: "Instagram", href: "https://instagram.com/agrilinkx" }
-            ].map((s) => (
-              <a key={s.name} href={s.href} target="_blank" rel="noreferrer" className="text-xs text-primary-foreground/40 hover:text-primary-foreground/70 transition-colors">
-                {s.name}
+
+          <div className="flex items-center gap-4">
+            {socialLinks.map((social) => (
+              <a
+                key={social.name}
+                href={social.href}
+                target="_blank"
+                rel="referrer"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-foreground/[0.03] text-primary-foreground/50 transition-all hover:bg-primary hover:text-primary-foreground hover:-translate-y-1"
+                aria-label={social.name}
+              >
+                <span className="text-xs font-semibold">{social.name[0]}</span>
               </a>
             ))}
           </div>

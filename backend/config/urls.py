@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.urls import path
 
-from api import views_admin, views_core, views_loans, views_social
+from api import views_admin, views_core, views_loans, views_social, views_companies
 
 from .bridge import legacy_view
 
@@ -28,6 +28,21 @@ urlpatterns = [
     path("api/profiles/me/photo", legacy_view(views_core.profile_me_photo)),
     path("api/profiles/farmers", legacy_view(views_core.profiles_farmers)),
     path("api/profiles/<str:user_id>", legacy_view(views_core.profile_public)),
+    path("api/companies", legacy_view(views_companies.companies_root)),
+    path("api/companies/me", legacy_view(views_companies.company_me)),
+    path("api/companies/<str:company_id>", legacy_view(views_companies.company_detail)),
+    path("api/companies/me/products", legacy_view(views_companies.company_products)),
+    path("api/companies/me/products/upload-image", legacy_view(views_companies.company_products_upload_image)),
+    path("api/companies/me/products/<str:product_id>", legacy_view(views_companies.company_product_detail)),
+    path("api/companies/me/orders", legacy_view(views_companies.company_orders)),
+    path("api/companies/me/partners", legacy_view(views_companies.company_partners)),
+    path("api/companies/me/procurement", legacy_view(views_companies.company_procurement_requests)),
+    path("api/companies/me/procurement/<str:request_id>", legacy_view(views_companies.company_procurement_request_detail)),
+    path("api/farmer/companies", legacy_view(views_companies.farmer_companies)),
+    path("api/farmer/procurement", legacy_view(views_companies.farmer_procurement)),
+    path("api/admin/companies", legacy_view(views_companies.admin_companies)),
+    path("api/admin/companies/create-direct", legacy_view(views_companies.admin_company_create_direct)),
+    path("api/admin/companies/<str:company_id>/verify", legacy_view(views_companies.admin_company_verify)),
     path("api/messages/conversations", legacy_view(views_social.conversations_root)),
     path("api/messages/conversations/<str:conversation_id>", legacy_view(views_social.conversation_detail)),
     path("api/messages/conversations/<str:conversation_id>/send", legacy_view(views_social.conversation_send)),
