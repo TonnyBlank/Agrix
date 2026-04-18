@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Link } from "react-router-dom";
-import { BadgeCheck, CreditCard, Heart, MapPin, MessageCircle, PackageCheck, Phone, Search, ShoppingCart, Sprout, Star, Video } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { BadgeCheck, Heart, MapPin, MessageCircle, PackageCheck, Search, ShoppingCart, Sprout, Star, Video } from "lucide-react";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMarketplaceProducts, type Product } from "@/hooks/useProducts";
 import { useOrders } from "@/hooks/useOrders";
@@ -31,8 +31,9 @@ function isSameCounty(left: string | null | undefined, right: string | null | un
 
 export default function Marketplace() {
   const { products, loading, toggleLike, rateProduct } = useMarketplaceProducts();
-  const { placeOrder, initiateMpesaPayment } = useOrders();
+  const { placeOrder } = useOrders();
   const { user, profile } = useAuth();
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
   const [countyFilter, setCountyFilter] = useState(ALL_COUNTIES_FILTER);
@@ -41,7 +42,6 @@ export default function Marketplace() {
   const [isResolvingDistances, setIsResolvingDistances] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [quantity, setQuantity] = useState("1");
-  const [mpesaPhone, setMpesaPhone] = useState("");
   const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   const viewerCounty = profile?.county?.trim() || "";
@@ -164,11 +164,6 @@ export default function Marketplace() {
   }, [selectedProduct?.id]);
 
   useEffect(() => {
-    if (!selectedProduct) return;
-    setMpesaPhone(profile?.phone || profile?.payout_mpesa_number || "");
-  }, [profile?.phone, profile?.payout_mpesa_number, selectedProduct]);
-
-  useEffect(() => {
     let cancelled = false;
 
     const loadDistances = async () => {
@@ -232,11 +227,6 @@ export default function Marketplace() {
       toast.error(`Only ${syncedSelectedProduct.stock} ${syncedSelectedProduct.unit} available for this product.`);
       return;
     }
-    if (!mpesaPhone.trim()) {
-      toast.error("Enter the M-Pesa number that should receive the payment prompt.");
-      return;
-    }
-
     setIsCheckingOut(true);
     const createdOrder = await placeOrder({
       product_id: syncedSelectedProduct.id,
@@ -248,13 +238,10 @@ export default function Marketplace() {
     });
 
     if (createdOrder) {
-      const paymentStarted = await initiateMpesaPayment(createdOrder.id, mpesaPhone);
-      if (!paymentStarted) {
-        toast.message("Your order was created. Open Orders to retry the M-Pesa payment.");
-      }
+      toast.success("Order created. Continue in Orders to make payment once.");
       setSelectedProduct(null);
       setQuantity("1");
-      setMpesaPhone(profile?.phone || profile?.payout_mpesa_number || "");
+      void navigate("/dashboard/orders", { replace: false });
     }
     setIsCheckingOut(false);
   };
@@ -692,33 +679,16 @@ export default function Marketplace() {
 
                 <div className="rounded-[1.75rem] border border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.96),rgba(255,255,255,0.95))] p-5 shadow-sm dark:border-emerald-500/30 dark:bg-[linear-gradient(135deg,rgba(6,78,59,0.28),rgba(15,23,42,0.94))]">
                   <div className="flex items-start gap-3">
-                    <div className="rounded-2xl bg-white/90 p-3 text-emerald-700 shadow-sm dark:bg-background/80 dark:text-emerald-300">
-                      <CreditCard className="h-5 w-5" />
-                    </div>
                     <div className="space-y-1">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Payment Method</p>
-                      <h4 className="font-display text-xl font-bold text-foreground">M-Pesa STK Push</h4>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Next Step</p>
+                      <h4 className="font-display text-xl font-bold text-foreground">Create order first</h4>
                       <p className="text-sm leading-6 text-muted-foreground">
-                        We will send the payment prompt to this number immediately after the order is created.
+                        When you place the order here, it appears in your Orders page. Payment happens there once, so buyers do not get duplicate payment steps.
                       </p>
                     </div>
                   </div>
-
-                  <div className="mt-5 space-y-2">
-                    <Label htmlFor="mpesa-phone" className="flex items-center gap-2">
-                      <Phone className="h-4 w-4" />
-                      M-Pesa Number
-                    </Label>
-                    <Input
-                      id="mpesa-phone"
-                      value={mpesaPhone}
-                      onChange={(e) => setMpesaPhone(e.target.value)}
-                      placeholder="2547XXXXXXXX"
-                      className="rounded-xl border-emerald-200 bg-white/90 dark:border-emerald-500/30 dark:bg-background/80"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Use your Safaricom number in the format `2547XXXXXXXX` or `07XXXXXXXX`.
-                    </p>
+                  <div className="mt-5 rounded-[1.25rem] border border-emerald-200/70 bg-white/85 px-4 py-3 text-sm text-muted-foreground dark:border-emerald-500/20 dark:bg-background/60">
+                    Open Orders after placing the order to send the M-Pesa prompt only from one place.
                   </div>
                 </div>
 
@@ -729,7 +699,7 @@ export default function Marketplace() {
                     </Link>
                   </Button>
                   <Button onClick={() => void handleBuy()} disabled={isCheckingOut} className="h-12 w-full rounded-xl">
-                    {isCheckingOut ? "Processing..." : "Place Order & Pay with M-Pesa"}
+                    {isCheckingOut ? "Creating Order..." : "Place Order"}
                   </Button>
                 </DialogFooter>
               </div>

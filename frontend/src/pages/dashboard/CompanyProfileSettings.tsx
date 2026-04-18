@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, apiFetch } from "@/lib/api";
 import { supabase } from "@/integrations/supabase/client";
+import { isValidKenyanPhone, normalizeKenyanPhone, sanitizePhoneInput } from "@/lib/inputSanitizers";
 
 type CompanyProfile = {
   id: string;
@@ -159,7 +160,10 @@ export default function CompanyProfileSettings() {
   }, []);
 
   const updateField = (key: keyof typeof initialForm, value: string) => {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => ({
+      ...current,
+      [key]: key === "phone" ? sanitizePhoneInput(value) : value,
+    }));
   };
 
   const parsedServiceAreas = useMemo(() => splitCommaList(form.service_areas), [form.service_areas]);
@@ -239,6 +243,11 @@ export default function CompanyProfileSettings() {
         return;
       }
 
+      if (!isValidKenyanPhone(form.phone)) {
+        toast.error("Enter a valid Kenyan phone number like 0712345678 or +254712345678.");
+        return;
+      }
+
       if (!form.website.trim()) {
         toast.error("Complete the website before saving contact details.");
         return;
@@ -263,7 +272,7 @@ export default function CompanyProfileSettings() {
           company_name: form.company_name.trim(),
           company_type: form.company_type.trim() || "other",
           email: form.email.trim() || null,
-          phone: form.phone.trim() || null,
+          phone: form.phone.trim() ? normalizeKenyanPhone(form.phone) : null,
           website: normalizeWebsite(form.website),
           registration_number: form.registration_number.trim() || null,
           tax_id: form.tax_id.trim() || null,
@@ -494,7 +503,7 @@ export default function CompanyProfileSettings() {
                         <Label htmlFor="email">Company email</Label>
                         <div className="relative">
                           <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                          <Input id="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} className="pl-9" placeholder="company@example.com" />
+                          <Input id="email" type="email" value={form.email} onChange={(event) => updateField("email", event.target.value)} className="pl-9" placeholder="company@example.com" />
                         </div>
                       </div>
 
@@ -502,7 +511,7 @@ export default function CompanyProfileSettings() {
                         <Label htmlFor="phone">Phone number</Label>
                         <div className="relative">
                           <Phone className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                          <Input id="phone" value={form.phone} onChange={(event) => updateField("phone", event.target.value)} className="pl-9" placeholder="+2547..." />
+                          <Input id="phone" type="tel" inputMode="tel" value={form.phone} onChange={(event) => updateField("phone", event.target.value)} className="pl-9" placeholder="+2547..." />
                         </div>
                       </div>
                     </div>
@@ -511,7 +520,7 @@ export default function CompanyProfileSettings() {
                       <Label htmlFor="website">Website</Label>
                       <div className="relative">
                         <Globe className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                        <Input id="website" value={form.website} onChange={(event) => updateField("website", event.target.value)} className="pl-9" placeholder="www.company.co.ke" />
+                        <Input id="website" type="url" value={form.website} onChange={(event) => updateField("website", event.target.value)} className="pl-9" placeholder="www.company.co.ke" />
                       </div>
                     </div>
 

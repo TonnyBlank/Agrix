@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { AdminOrder, adminTone, downloadReceiptsCsv, formatCount, formatDateTime, formatMoney } from "./shared";
+import { toast } from "sonner";
 
 const TRANSACTIONS_PER_PAGE = 10;
 const RANGE_OPTIONS = [
@@ -19,6 +20,14 @@ const RANGE_OPTIONS = [
 
 function totalOrderValue(order: AdminOrder) {
   return (order.total_price ?? 0) + Number(order.delivery_fee ?? 0);
+}
+
+function canReleasePayout(order: AdminOrder) {
+  return order.payment_status === "paid" && order.status === "delivered" && order.payout_status !== "released";
+}
+
+function canConfirmDelivery(order: AdminOrder) {
+  return order.status === "processing" || order.status === "shipped";
 }
 
 function matchesDateRange(order: AdminOrder, days: number) {
@@ -67,13 +76,19 @@ function PaginationControls({
 function TransactionsDesktopTable({
   orders,
   startIndex,
+  savingKey,
+  onConfirmDelivery,
+  onReleasePayout,
 }: {
   orders: AdminOrder[];
   startIndex: number;
+  savingKey: string | null;
+  onConfirmDelivery: (order: AdminOrder) => void;
+  onReleasePayout: (order: AdminOrder) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-[1rem] border border-border/70 bg-white/90 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
-      <table className="w-full min-w-[1220px] border-collapse">
+      <table className="w-full min-w-[1480px] border-collapse">
         <thead>
           <tr className="border-b border-border bg-muted/25 text-left text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             <th className="px-4 py-3">No.</th>
@@ -81,9 +96,11 @@ function TransactionsDesktopTable({
             <th className="px-4 py-3">Buyer</th>
             <th className="px-4 py-3">Farmer</th>
             <th className="px-4 py-3">Value</th>
+            <th className="px-4 py-3">Escrow Split</th>
             <th className="px-4 py-3">Receipt Ref</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Timeline</th>
+            <th className="px-4 py-3">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -109,6 +126,10 @@ function TransactionsDesktopTable({
                 <p className="text-xs text-muted-foreground">Order plus delivery</p>
               </td>
               <td className="px-4 py-3.5">
+                <p className="font-medium text-foreground">Commission {formatMoney(Number(order.agrilink_commission_amount || 0))}</p>
+                <p className="text-xs text-muted-foreground">Seller payout {formatMoney(Number(order.seller_payout_amount || 0))}</p>
+              </td>
+              <td className="px-4 py-3.5">
                 <p className="font-medium text-foreground">{order.payment_ref || "No receipt ref"}</p>
                 <p className="text-xs text-muted-foreground">{order.payment_ref ? "Receipt captured" : "Awaiting receipt"}</p>
               </td>
@@ -123,6 +144,9 @@ function TransactionsDesktopTable({
                   >
                     {order.payment_status}
                   </span>
+                  <span className="inline-flex rounded-full bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700 dark:text-sky-300">
+                    {order.payout_status || "pending_payment"}
+                  </span>
                 </div>
               </td>
               <td className="px-4 py-3.5">
@@ -130,6 +154,24 @@ function TransactionsDesktopTable({
                 <p className="text-xs text-muted-foreground">
                   {order.paid_at ? `Paid ${formatDateTime(order.paid_at)}` : "Payment pending"}
                 </p>
+                <p className="text-xs text-muted-foreground">
+                  {order.official_verified_at ? `Official sign-off ${formatDateTime(order.official_verified_at)}` : "Official sign-off pending"}
+                </p>
+              </td>
+              <td className="px-4 py-3.5">
+                {canReleasePayout(order) ? (
+                  <Button className="rounded-xl" size="sm" disabled={savingKey === `release-${order.id}`} onClick={() => onReleasePayout(order)}>
+                    {savingKey === `release-${order.id}` ? "Releasing..." : "Official Sign-Off"}
+                  </Button>
+                ) : canConfirmDelivery(order) ? (
+                  <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => onConfirmDelivery(order)}>
+                    {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                  </Button>
+                ) : (
+                  <span className="text-xs text-muted-foreground">
+                    {order.payout_status === "released" ? "Released" : "Waiting"}
+                  </span>
+                )}
               </td>
             </tr>
           ))}
@@ -201,7 +243,9 @@ export default function AdminTransactions() {
             order.id,
             order.product?.name,
             order.payment_ref,
+            order.status,
             order.payment_status,
+            order.payout_status,
             order.buyer_profile?.full_name,
             order.farmer_profile?.full_name,
           ]
@@ -234,6 +278,54 @@ export default function AdminTransactions() {
     }
   };
 
+  const handleReleasePayout = async (order: AdminOrder) => {
+    const savingId = `release-${order.id}`;
+    setSavingKey(savingId);
+    setErrorMessage(null);
+    try {
+      const updated = await apiFetch<AdminOrder>(`/admin/orders/${order.id}/release`, {
+        method: "PATCH",
+        body: {
+          official_note: "Official AgriLink delivery sign-off completed. Seller payout released after escrow verification.",
+        } as unknown as BodyInit,
+      });
+      setOrders((current) => current.map((item) => (item.id === order.id ? updated : item)));
+      toast.success("Seller payout released after official sign-off.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not release seller payout.";
+      setErrorMessage(message);
+      toast.error(message);
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const handleConfirmDelivery = async (order: AdminOrder) => {
+    const savingId = `confirm-${order.id}`;
+    setSavingKey(savingId);
+    setErrorMessage(null);
+    try {
+      const updated = await apiFetch<AdminOrder>(`/admin/orders/${order.id}/confirm-delivery`, {
+        method: "PATCH",
+        body: {
+          official_note: "Official AgriLink delivery confirmation completed successfully.",
+        } as unknown as BodyInit,
+      });
+      setOrders((current) => current.map((item) => (item.id === order.id ? updated : item)));
+      toast.success(
+        updated.payment_status === "paid"
+          ? "Delivery confirmed and seller payout released."
+          : "Delivery confirmed by admin.",
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not confirm delivery.";
+      setErrorMessage(message);
+      toast.error(message);
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
   return (
     <DashboardShell title="Transactions">
       <div className="space-y-6">
@@ -260,7 +352,7 @@ export default function AdminTransactions() {
             </div>
             <p className="mt-4 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Pending Flow</p>
             <p className="mt-2 font-display text-3xl font-bold text-foreground">{formatCount(pendingOrders.length)}</p>
-            <p className="mt-1 text-sm text-muted-foreground">Transactions still waiting on payment confirmation.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Transactions still waiting on payment, delivery confirmation, or payout release.</p>
           </div>
           <div className={`rounded-[1.5rem] border p-5 ${adminTone("rose").card}`}>
             <div className={`flex h-11 w-11 items-center justify-center rounded-2xl ${adminTone("rose").iconWrap}`}>
@@ -281,7 +373,7 @@ export default function AdminTransactions() {
               </div>
               <h2 className="mt-4 font-display text-3xl font-bold text-foreground">Transactions desk</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Review payment flow like the orders page, filter by time range, and move through transactions in clean pages.
+                Buyer funds land in AgriLink escrow first. AgriLink keeps 5% commission, then seller payout is only released after delivery is signed off here by an official.
               </p>
             </div>
             <Button type="button" variant="outline" className="rounded-xl bg-background/80" onClick={() => void handleDownload()} disabled={savingKey === "download-csv"}>
@@ -322,15 +414,40 @@ export default function AdminTransactions() {
         <section className="space-y-4">
           <div className="rounded-[2rem] border border-sky-200/60 bg-[linear-gradient(135deg,rgba(255,255,255,0.96),rgba(240,249,255,0.92))] p-6 shadow-[0_18px_44px_-30px_rgba(56,189,248,0.18)] dark:border-sky-500/20 dark:bg-[linear-gradient(135deg,rgba(15,23,42,0.94),rgba(17,24,39,0.92))]">
             <h3 className="font-display text-xl font-bold text-foreground">Transactions List</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Structured like orders so admins can scan buyer, farmer, value, payment status, and receipt details faster.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Structured like orders so admins can scan escrow, commission, seller payout, and official sign-off status faster.</p>
 
             <div className="mt-4 hidden lg:block">
-              <TransactionsDesktopTable orders={paginatedOrders} startIndex={(page - 1) * TRANSACTIONS_PER_PAGE} />
+              <TransactionsDesktopTable
+                orders={paginatedOrders}
+                startIndex={(page - 1) * TRANSACTIONS_PER_PAGE}
+                savingKey={savingKey}
+                onConfirmDelivery={handleConfirmDelivery}
+                onReleasePayout={handleReleasePayout}
+              />
             </div>
 
             <div className="mt-4 space-y-3 lg:hidden">
               {paginatedOrders.map((order) => (
-                <TransactionCard key={order.id} order={order} />
+                <div key={order.id} className="space-y-2">
+                  <TransactionCard order={order} />
+                  <div className="rounded-[1rem] border border-border/70 bg-white/90 p-3 text-sm shadow-[0_12px_22px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-foreground">AgriLink commission: {formatMoney(Number(order.agrilink_commission_amount || 0))}</p>
+                        <p className="text-xs text-muted-foreground">Seller payout: {formatMoney(Number(order.seller_payout_amount || 0))} • {order.payout_status || "pending_payment"}</p>
+                      </div>
+                      {canReleasePayout(order) ? (
+                        <Button className="rounded-xl" size="sm" disabled={savingKey === `release-${order.id}`} onClick={() => void handleReleasePayout(order)}>
+                          {savingKey === `release-${order.id}` ? "Releasing..." : "Official Sign-Off"}
+                        </Button>
+                      ) : canConfirmDelivery(order) ? (
+                        <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => void handleConfirmDelivery(order)}>
+                          {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
 

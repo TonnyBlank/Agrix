@@ -31,6 +31,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useIdVerification } from "@/hooks/useIdVerification";
 import { useOrders } from "@/hooks/useOrders";
 import { apiFetch } from "@/lib/api";
+import { normalizeKenyanPhone as normalizeKenyanPhoneInput, sanitizeDecimalInput, sanitizePhoneInput } from "@/lib/inputSanitizers";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 
@@ -114,6 +115,7 @@ type LoanApplication = {
   requires_branch_visit: boolean;
   branch_name?: string | null;
   branch_location?: string | null;
+  target_county?: string | null;
   branch_instructions?: string | null;
   branch_visit_status: BranchVisitStatus;
   collateral_types: string[];
@@ -145,6 +147,7 @@ type FundingOption = {
   requiresBranchVisit: boolean;
   branchName?: string | null;
   branchLocation?: string | null;
+  targetCounty?: string | null;
   branchInstructions?: string | null;
   collateralTypes: string[];
   requiredDocuments: string[];
@@ -164,11 +167,43 @@ const SECURITY_TYPE_LABELS: Record<LoanSecurityType, string> = {
 const BRANCH_STATUS_LABELS: Record<BranchVisitStatus, string> = {
   not_required: "No branch visit needed",
   pending_customer_visit: "Visit branch with documents",
-  documents_received: "Documents received",
+  documents_received: "Branch accepted your file",
   valuation_pending: "Valuation in progress",
-  verified: "Branch verification complete",
+  verified: "Branch accepted and cleared",
   waived: "Branch requirement waived",
 };
+
+const SAFE_MICRO_LOAN_APPLICATION_SELECT = [
+  "id",
+  "user_id",
+  "applicant_role",
+  "product_type",
+  "product_title",
+  "requested_amount",
+  "approved_amount",
+  "speed",
+  "interest_rate",
+  "repayment_days",
+  "status",
+  "note",
+  "guarantors",
+  "security_type",
+  "requires_branch_visit",
+  "branch_name",
+  "branch_location",
+  "target_county",
+  "branch_instructions",
+  "branch_visit_status",
+  "collateral_types",
+  "required_documents",
+  "collateral_items",
+  "repayment_method",
+  "created_at",
+  "updated_at",
+  "reviewed_at",
+  "disbursed_at",
+  "repaid_at",
+].join(", ");
 
 const COLLATERAL_TYPE_OPTIONS = [
   { value: "title_deed", label: "Title deed" },
@@ -277,16 +312,6 @@ function buildLoanSchedule(input: {
   };
 }
 
-function normalizeKenyanPhone(phone: string) {
-  const digits = phone.replace(/\D+/g, "");
-
-  if (digits.startsWith("254") && digits.length === 12) return digits;
-  if (digits.startsWith("0") && digits.length === 10) return `254${digits.slice(1)}`;
-  if (digits.startsWith("7") && digits.length === 9) return `254${digits}`;
-
-  throw new Error("Phone number must be a valid Kenyan mobile number");
-}
-
 function normalizeStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -312,6 +337,10 @@ function normalizeCollateralItems(value: unknown): CollateralItem[] {
 
 function getBranchStatusLabel(status: BranchVisitStatus) {
   return BRANCH_STATUS_LABELS[status] ?? BRANCH_STATUS_LABELS.pending_customer_visit;
+}
+
+function normalizeCountyText(value: string | null | undefined) {
+  return String(value ?? "").trim().toLowerCase();
 }
 
 function isLoanRepayable(application: LoanApplication) {
@@ -340,6 +369,7 @@ function enrichLoanApplication(loan: MicroLoanApplicationRow, repayments: LoanRe
     requires_branch_visit: Boolean(loan.requires_branch_visit),
     branch_name: loan.branch_name ?? null,
     branch_location: loan.branch_location ?? null,
+    target_county: loan.target_county ?? loan.branch_location ?? null,
     branch_instructions: loan.branch_instructions ?? null,
     branch_visit_status: (loan.branch_visit_status as BranchVisitStatus) ?? (loan.requires_branch_visit ? "pending_customer_visit" : "not_required"),
     collateral_types: normalizeStringArray(loan.collateral_types),
@@ -355,15 +385,30 @@ function enrichLoanApplication(loan: MicroLoanApplicationRow, repayments: LoanRe
 }
 
 async function loadLoanApplicationsFromSupabase(userId: string) {
-  const { data: _loans, error: loansError } = await supabase
+  let { data: _loans, error: loansError } = await supabase
     .from("micro_loan_applications")
     .select("*")
     // @ts-expect-error DB types inference too deep for foreign relation eq mapping
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
-  const loans = _loans as unknown as MicroLoanApplicationRow[];
+
+  if (loansError?.code === "PGRST204" && loansError.message.includes("disbursement_method")) {
+    const fallbackResult = await supabase
+      .from("micro_loan_applications")
+      .select(SAFE_MICRO_LOAN_APPLICATION_SELECT)
+      // @ts-expect-error DB types inference too deep for foreign relation eq mapping
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+    _loans = fallbackResult.data;
+    loansError = fallbackResult.error;
+  }
 
   if (loansError) throw loansError;
+  const loans = ((_loans ?? []) as unknown[]).map((loan) => ({
+    disbursement_method: "mpesa",
+    voucher_code: null,
+    ...loan,
+  })) as MicroLoanApplicationRow[];
 
   const loanIds = (loans ?? []).map((loan) => loan.id);
   const { data: _repayments, error: repaymentsError } = loanIds.length
@@ -398,7 +443,7 @@ async function loadLoanApplicationsFromSupabase(userId: string) {
     enrichLoanApplication(loan, repaymentsByLoanId.get(loan.id) ?? []));
 }
 
-async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: number) {
+async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: number, borrowerCounty: string | null | undefined) {
   const { data: _data, error } = await supabase
     .from("micro_loan_offers")
     .select("*")
@@ -411,7 +456,14 @@ async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: n
 
   if (error) throw error;
 
-  return (data ?? []).map((offer) => {
+  const normalizedBorrowerCounty = normalizeCountyText(borrowerCounty);
+
+  return (data ?? [])
+    .filter((offer) => {
+      const targetCounty = offer.target_county ?? offer.branch_location ?? null;
+      return Boolean(normalizedBorrowerCounty) && normalizeCountyText(targetCounty) === normalizedBorrowerCounty;
+    })
+    .map((offer) => {
     const available = Math.min(Math.max(0, availableAmount), Number(offer.max_amount ?? 0));
     return {
       key: offer.id,
@@ -432,6 +484,7 @@ async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: n
       requiresBranchVisit: Boolean(offer.requires_branch_visit),
       branchName: offer.branch_name ?? null,
       branchLocation: offer.branch_location ?? null,
+      targetCounty: offer.target_county ?? offer.branch_location ?? null,
       branchInstructions: offer.branch_instructions ?? null,
       collateralTypes: normalizeStringArray(offer.collateral_types),
       requiredDocuments: normalizeStringArray(offer.required_documents),
@@ -622,7 +675,7 @@ function ProGate() {
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="relative max-w-lg overflow-hidden rounded-[1.75rem] border border-emerald-200/60 bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.18),_transparent_40%),linear-gradient(135deg,rgba(255,255,255,0.98),rgba(236,253,245,0.92))] p-7 text-center shadow-[0_25px_80px_-40px_rgba(5,150,105,0.5)] dark:border-emerald-500/30 dark:bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.16),_transparent_40%),linear-gradient(135deg,rgba(15,23,42,0.97),rgba(17,24,39,0.96))]"
+        className="relative max-w-lg overflow-hidden rounded-[1.75rem] border border-border/70 bg-white/95 p-7 text-center shadow-[0_20px_50px_-35px_rgba(15,23,42,0.22)] dark:bg-card/95"
       >
         <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-[1.2rem] bg-emerald-100 text-primary shadow-inner">
           <Lock className="h-8 w-8" />
@@ -876,6 +929,7 @@ function MicroLoansDashboard() {
         requires_branch_visit: boolean;
         branch_name?: string | null;
         branch_location?: string | null;
+        target_county?: string | null;
         branch_instructions?: string | null;
         collateral_types: string[];
         required_documents: string[];
@@ -897,6 +951,7 @@ function MicroLoansDashboard() {
           requiresBranchVisit: Boolean(offer.requires_branch_visit),
           branchName: offer.branch_name ?? null,
           branchLocation: offer.branch_location ?? null,
+          targetCounty: offer.target_county ?? offer.branch_location ?? null,
           branchInstructions: offer.branch_instructions ?? null,
           collateralTypes: normalizeStringArray(offer.collateral_types),
           requiredDocuments: normalizeStringArray(offer.required_documents),
@@ -908,7 +963,7 @@ function MicroLoansDashboard() {
         setLoanOffers([]);
       } else {
         try {
-          const fallbackData = await loadLoanOffersFromSupabase(role, eligibility.isEligible ? netEligibleAmount : 0);
+          const fallbackData = await loadLoanOffersFromSupabase(role, eligibility.isEligible ? netEligibleAmount : 0, profile?.county ?? null);
           setLoanOffers(fallbackData);
         } catch (fallbackError) {
           toast.error(`Failed to load loan offers: ${(fallbackError as Error).message}`);
@@ -1083,7 +1138,7 @@ function MicroLoansDashboard() {
         toast.error((error as Error).message);
       } else {
         try {
-          const normalizedPhone = normalizeKenyanPhone(repaymentPhone);
+          const normalizedPhone = normalizeKenyanPhoneInput(repaymentPhone);
           const remainingBalance = Number(repaymentDialogLoan.loan_summary?.remainingBalance ?? 0);
           if (amount > remainingBalance) {
             throw new Error(`Repayment exceeds the current balance of KES ${remainingBalance.toFixed(2)}.`);
@@ -1298,7 +1353,7 @@ function MicroLoansDashboard() {
 
 
       {focusedSectionIntro ? (
-        <section className="rounded-[1.2rem] border border-sky-200/70 bg-[linear-gradient(135deg,rgba(14,165,233,0.14),rgba(255,255,255,0.96))] p-4 shadow-[0_16px_28px_-24px_rgba(14,165,233,0.35)] dark:bg-card/90">
+        <section className="rounded-[1.2rem] border border-border/70 bg-white/95 p-4 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.16)] dark:bg-card/90">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="inline-flex rounded-full bg-sky-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700 dark:bg-sky-500/10 dark:text-sky-300">Micro Loans</p>
@@ -1523,19 +1578,13 @@ function MicroLoansDashboard() {
             </div>
           ) : (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
-            {fundingOptions.map((option, index) => {
+            {fundingOptions.map((option) => {
               const optionHasDuplicate = Boolean(option.productType && activeLoanTypes.has(option.productType));
-              const accentTone =
-                index === 0
-                  ? "border-emerald-200/80 from-emerald-50 via-white to-emerald-100/70 dark:border-emerald-500/30 dark:from-emerald-500/12 dark:via-slate-950/95 dark:to-emerald-500/8"
-                  : index === 1
-                    ? "border-teal-200/80 from-teal-50 via-white to-cyan-100/70 dark:border-cyan-500/30 dark:from-cyan-500/12 dark:via-slate-950/95 dark:to-teal-500/8"
-                    : "border-lime-200/80 from-lime-50 via-white to-emerald-100/70 dark:border-lime-500/30 dark:from-lime-500/12 dark:via-slate-950/95 dark:to-emerald-500/8";
 
               return (
                 <div
                   key={option.title}
-                  className="flex h-full min-w-0 flex-col rounded-[1rem] border border-border/70 bg-white/95 p-3.5 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-[linear-gradient(180deg,rgba(15,23,42,0.98),rgba(2,6,23,0.94))]"
+                  className="flex h-full min-w-0 flex-col rounded-[1rem] border border-border/70 bg-white/95 p-3.5 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:border-white/10 dark:bg-card/95"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <span className="rounded-full bg-foreground/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground dark:bg-white/5 dark:text-slate-300">
@@ -1558,14 +1607,14 @@ function MicroLoansDashboard() {
                     ) : null}
                   </div>
 
-                  <div className={`mt-3 rounded-[0.95rem] border bg-gradient-to-br p-3.5 ${accentTone}`}>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-800/70 dark:text-emerald-200/80">
+                  <div className="mt-3 rounded-[0.95rem] border border-border bg-background p-3.5">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
                       Amount Available
                     </p>
-                    <p className="mt-2 break-words font-display text-[1.45rem] font-black leading-tight tracking-tight text-emerald-950 sm:text-[1.7rem] dark:text-white">
+                    <p className="mt-2 break-words font-display text-[1.45rem] font-black leading-tight tracking-tight text-foreground sm:text-[1.7rem]">
                       {option.amount}
                     </p>
-                    <p className="mt-1.5 text-sm leading-6 text-emerald-900/70 dark:text-slate-300">
+                    <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
                       Published by admin and adjusted to your current eligibility limit.
                     </p>
                   </div>
@@ -1573,7 +1622,7 @@ function MicroLoansDashboard() {
                   <p className="mt-3 text-sm leading-6 text-muted-foreground">{option.detail}</p>
                   {option.requiresBranchVisit || option.securityType !== "unsecured" ? (
                     <div className="mt-3 rounded-[0.85rem] border border-amber-200 bg-amber-50/70 px-3 py-2.5 text-sm text-amber-900">
-                      {option.branchInstructions || "Bring the required collateral documents to the branch for verification before disbursement."}
+                      {option.branchInstructions || "Bring the required collateral documents to the branch. Once the branch accepts your file, the loan can be released."}
                     </div>
                   ) : null}
 
@@ -1919,7 +1968,7 @@ function MicroLoansDashboard() {
                     <QRCode value={selectedLoanReceipt.voucher_code} size={150} />
                   </div>
                   <p className="mt-4 font-mono text-xl font-bold tracking-widest text-emerald-900">{selectedLoanReceipt.voucher_code}</p>
-                  <p className="mt-2 text-center text-sm text-emerald-700/80">Show this QR Code at a verified Agro-vet dealer to collect your items.</p>
+                  <p className="mt-2 text-center text-sm text-emerald-700/80">Show this QR code at a verified Agro-vet dealer to collect your items.</p>
                 </div>
               ) : null}
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1980,10 +2029,14 @@ function MicroLoansDashboard() {
                         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">Branch Status</p>
                         <p className="mt-1 text-sm font-semibold text-foreground">{getBranchStatusLabel(selectedLoanReceipt.branch_visit_status)}</p>
                       </div>
+                      <div className="rounded-[1rem] border border-amber-200 bg-white/80 px-4 py-3 sm:col-span-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">Eligible County</p>
+                        <p className="mt-1 text-sm font-semibold text-foreground">{selectedLoanReceipt.target_county || "County to be confirmed"}</p>
+                      </div>
                     </div>
                     <div className="mt-3 rounded-[1rem] border border-amber-200 bg-white/80 px-4 py-3 text-sm text-muted-foreground">
                       <p className="font-semibold text-foreground">{selectedLoanReceipt.branch_name || "Branch assignment pending"}{selectedLoanReceipt.branch_location ? ` | ${selectedLoanReceipt.branch_location}` : ""}</p>
-                      <p className="mt-2">{selectedLoanReceipt.branch_instructions || "Bring the required documents to the branch for collateral and identity review before disbursement."}</p>
+                      <p className="mt-2">{selectedLoanReceipt.branch_instructions || "Bring the required documents to the branch. Once the branch accepts and clears your file, the loan is released."}</p>
                     </div>
                   </div>
                   <div className="rounded-[1.5rem] border border-border bg-background/80 p-4">
@@ -2145,8 +2198,10 @@ function MicroLoansDashboard() {
               <label className="text-sm font-medium text-foreground" htmlFor="repayment-amount">Amount to pay</label>
               <input
                 id="repayment-amount"
+                type="text"
+                inputMode="decimal"
                 value={repaymentAmount}
-                onChange={(event) => setRepaymentAmount(event.target.value)}
+                onChange={(event) => setRepaymentAmount(sanitizeDecimalInput(event.target.value, { maxDecimals: 2 }))}
                 placeholder="KES amount"
                 className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
               />
@@ -2156,8 +2211,10 @@ function MicroLoansDashboard() {
               <label className="text-sm font-medium text-foreground" htmlFor="repayment-phone">M-Pesa number</label>
               <input
                 id="repayment-phone"
+                type="tel"
+                inputMode="tel"
                 value={repaymentPhone}
-                onChange={(event) => setRepaymentPhone(event.target.value)}
+                onChange={(event) => setRepaymentPhone(sanitizePhoneInput(event.target.value))}
                 placeholder="07XXXXXXXX"
                 className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
               />
@@ -2213,9 +2270,10 @@ function MicroLoansDashboard() {
               <label className="text-sm font-semibold text-foreground" htmlFor="loan-amount">Requested Amount (KES)</label>
               <Input
                 id="loan-amount"
-                type="number"
+                type="text"
+                inputMode="decimal"
                 value={requestedLoanAmount}
-                onChange={(e) => setRequestedLoanAmount(e.target.value)}
+                onChange={(e) => setRequestedLoanAmount(sanitizeDecimalInput(e.target.value, { maxDecimals: 2 }))}
                 placeholder="Enter amount"
                 className="h-12 rounded-xl"
               />
@@ -2276,6 +2334,10 @@ function MicroLoansDashboard() {
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">Branch</p>
                     <p className="mt-1 text-sm font-semibold text-foreground">{selectedOffer?.branchName || "Assigned after submission"}</p>
                     {selectedOffer?.branchLocation ? <p className="mt-1 text-xs text-muted-foreground">{selectedOffer.branchLocation}</p> : null}
+                  </div>
+                  <div className="rounded-[1rem] border border-amber-200 bg-white/80 px-4 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">Eligible County</p>
+                    <p className="mt-1 text-sm font-semibold text-foreground">{selectedOffer?.targetCounty || "County to be confirmed"}</p>
                   </div>
                   <div className="rounded-[1rem] border border-amber-200 bg-white/80 px-4 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-700">Required Documents</p>
@@ -2468,10 +2530,12 @@ function MicroLoansDashboard() {
                     <div className="space-y-1.5">
                       <p className="text-xs font-medium text-muted-foreground">Phone Number</p>
                       <Input
+                        type="tel"
+                        inputMode="tel"
                         value={guarantor.phone}
                         onChange={(e) => {
                           const newG = [...guarantors];
-                          newG[index].phone = e.target.value;
+                          newG[index].phone = sanitizePhoneInput(e.target.value);
                           setGuarantors(newG);
                         }}
                         placeholder="07XXXXXXXX"

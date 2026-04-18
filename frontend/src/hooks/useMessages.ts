@@ -118,40 +118,31 @@ export function useMessages(activeConversationId: string | null) {
 
     try {
       const data = await apiFetch<Conversation[]>("/messages/conversations");
-      const profilesByUserId = await loadConversationProfiles(user.id, data);
-      const enriched = data.map((conversation) => {
-        const otherId =
-          conversation.participant_a === user.id
-            ? conversation.participant_b
-            : conversation.participant_a;
-        const profile = profilesByUserId.get(otherId);
-        return {
-          ...conversation,
-          other_name: profile?.full_name || "Unknown",
-          other_photo_url: profile?.photo_url || null,
-        };
-      });
-
-      setConversations(enriched);
+      setConversations(data);
     } catch (error) {
       console.error("Failed to load conversations from API, falling back to Supabase", error);
       try {
         const fallbackData = await loadConversationsFromSupabase(user.id);
-        const profilesByUserId = await loadConversationProfiles(user.id, fallbackData);
-        const enriched = fallbackData.map((conversation) => {
-          const otherId =
-            conversation.participant_a === user.id
-              ? conversation.participant_b
-              : conversation.participant_a;
-          const profile = profilesByUserId.get(otherId);
-          return {
-            ...conversation,
-            other_name: profile?.full_name || "Unknown",
-            other_photo_url: profile?.photo_url || null,
-          };
-        });
-
-        setConversations(enriched);
+        try {
+          const profilesByUserId = await loadConversationProfiles(user.id, fallbackData);
+          setConversations(
+            fallbackData.map((conversation) => {
+              const otherId =
+                conversation.participant_a === user.id
+                  ? conversation.participant_b
+                  : conversation.participant_a;
+              const profile = profilesByUserId.get(otherId);
+              return {
+                ...conversation,
+                other_name: profile?.full_name || "Unknown",
+                other_photo_url: profile?.photo_url || null,
+              };
+            }),
+          );
+        } catch (profileError) {
+          console.error("Failed to load conversation profile details from Supabase", profileError);
+          setConversations(fallbackData);
+        }
       } catch (fallbackError) {
         console.error("Failed to load conversations from Supabase", fallbackError);
         toast.error("Failed to load conversations");

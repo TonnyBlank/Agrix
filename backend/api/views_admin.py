@@ -18,7 +18,7 @@ from .common import (
     set_user_role_with_plan,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
-from .views_core import attach_order_meta
+from .views_core import attach_order_meta, release_order_payout
 from .views_loans import (
     compute_loan_eligibility,
     normalize_branch_visit_status,
@@ -28,7 +28,18 @@ from .views_loans import (
 )
 
 
-BRANCH_DISBURSEMENT_READY_STATUSES = {"verified", "waived"}
+BRANCH_DISBURSEMENT_READY_STATUSES = {"documents_received", "verified", "waived"}
+
+
+def clean_optional_text(value) -> str | None:
+    return str(value or "").strip() or None
+
+
+def require_text(value, label: str) -> str:
+    cleaned = clean_optional_text(value)
+    if not cleaned:
+        raise ApiException(f"{label} is required.", 400)
+    return cleaned
 
 
 def ensure_admin(request: HttpRequest):
@@ -163,6 +174,59 @@ def admin_orders(request: HttpRequest):
 
 @api_view
 @require_auth
+def admin_order_release(request: HttpRequest, order_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+    ensure_admin(request)
+    admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    if not order:
+        raise ApiException("Order not found.", 404)
+    body = parse_json_body(request)
+    official_note = str(body.get("official_note") or "").strip() or None
+    released = release_order_payout(admin, order, request.user_id, official_note)
+    return JsonResponse(attach_order_meta(admin, [released])[0])
+
+
+@api_view
+@require_auth
+def admin_order_confirm_delivery(request: HttpRequest, order_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+    ensure_admin(request)
+    admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") == "cancelled":
+        raise ApiException("Cancelled orders cannot be marked as delivered.", 400)
+    if order.get("status") not in {"processing", "shipped", "delivered"}:
+        raise ApiException("Only active delivery orders can be officially confirmed.", 400)
+
+    body = parse_json_body(request)
+    official_note = str(body.get("official_note") or "").strip() or "Official AgriLink delivery sign-off completed."
+
+    updated = admin.update(
+        "orders",
+        {
+            "status": "delivered",
+            "payout_status": "awaiting_official_signoff" if order.get("payment_status") == "paid" else order.get("payout_status") or "pending_payment",
+            "official_verified_at": order.get("official_verified_at") or now_iso(),
+            "official_verified_by": order.get("official_verified_by") or request.user_id,
+            "official_note": official_note,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+
+    if updated.get("payment_status") == "paid":
+        updated = release_order_payout(admin, updated, request.user_id, official_note)
+
+    return JsonResponse(attach_order_meta(admin, [updated])[0])
+
+
+@api_view
+@require_auth
 def admin_loan_candidates(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
@@ -216,6 +280,7 @@ def admin_loan_offers(request: HttpRequest):
                 "requires_branch_visit": bool(offer.get("requires_branch_visit")),
                 "branch_name": str(offer.get("branch_name") or "").strip() or None,
                 "branch_location": str(offer.get("branch_location") or "").strip() or None,
+                "target_county": clean_optional_text(offer.get("target_county")) or clean_optional_text(offer.get("branch_location")),
                 "branch_instructions": str(offer.get("branch_instructions") or "").strip() or None,
                 "collateral_types": normalize_text_list(offer.get("collateral_types")),
                 "required_documents": normalize_text_list(offer.get("required_documents")),
@@ -235,6 +300,9 @@ def admin_loan_offers(request: HttpRequest):
     max_amount = float(body.get("max_amount") or 0)
     if max_amount <= 0:
         raise ApiException("Maximum offer amount must be greater than zero.", 400)
+    branch_name = require_text(body.get("branch_name"), "Branch name")
+    branch_location = require_text(body.get("branch_location"), "Branch location")
+    target_county = require_text(body.get("target_county"), "Target county")
     security_type = normalize_security_type(body.get("security_type"))
     requires_branch_visit = bool(body.get("requires_branch_visit"))
     collateral_types = normalize_text_list(body.get("collateral_types"))
@@ -254,8 +322,9 @@ def admin_loan_offers(request: HttpRequest):
             "note": str(body.get("note") or "").strip() or None,
             "security_type": security_type,
             "requires_branch_visit": requires_branch_visit,
-            "branch_name": str(body.get("branch_name") or "").strip() or None,
-            "branch_location": str(body.get("branch_location") or "").strip() or None,
+            "branch_name": branch_name,
+            "branch_location": branch_location,
+            "target_county": target_county,
             "branch_instructions": str(body.get("branch_instructions") or "").strip() or None,
             "collateral_types": collateral_types,
             "required_documents": required_documents,
@@ -302,15 +371,26 @@ def admin_loan_offer_detail(request: HttpRequest, offer_id: str):
         if "requires_branch_visit" in body:
             updates["requires_branch_visit"] = bool(body.get("requires_branch_visit"))
         if "branch_name" in body:
-            updates["branch_name"] = str(body.get("branch_name") or "").strip() or None
+            updates["branch_name"] = clean_optional_text(body.get("branch_name"))
         if "branch_location" in body:
-            updates["branch_location"] = str(body.get("branch_location") or "").strip() or None
+            updates["branch_location"] = clean_optional_text(body.get("branch_location"))
+        if "target_county" in body:
+            updates["target_county"] = clean_optional_text(body.get("target_county"))
         if "branch_instructions" in body:
             updates["branch_instructions"] = str(body.get("branch_instructions") or "").strip() or None
         if "collateral_types" in body:
             updates["collateral_types"] = normalize_text_list(body.get("collateral_types"))
         if "required_documents" in body:
             updates["required_documents"] = normalize_text_list(body.get("required_documents"))
+        next_branch_name = updates.get("branch_name", clean_optional_text(existing.get("branch_name")))
+        next_branch_location = updates.get("branch_location", clean_optional_text(existing.get("branch_location")))
+        next_target_county = updates.get("target_county", clean_optional_text(existing.get("target_county")) or clean_optional_text(existing.get("branch_location")))
+        if not next_branch_name:
+            raise ApiException("Branch name is required on every published loan offer.", 400)
+        if not next_branch_location:
+            raise ApiException("Branch location is required on every published loan offer.", 400)
+        if not next_target_county:
+            raise ApiException("Target county is required on every published loan offer.", 400)
         next_security_type = updates.get("security_type", normalize_security_type(existing.get("security_type")))
         next_collateral_types = updates.get("collateral_types", normalize_text_list(existing.get("collateral_types")))
         if next_security_type == "collateral" and not next_collateral_types:
@@ -339,6 +419,7 @@ def admin_loans(request: HttpRequest):
                     "requires_branch_visit": bool(loan.get("requires_branch_visit")),
                     "branch_name": str(loan.get("branch_name") or "").strip() or None,
                     "branch_location": str(loan.get("branch_location") or "").strip() or None,
+                    "target_county": clean_optional_text(loan.get("target_county")) or clean_optional_text(loan.get("branch_location")),
                     "branch_instructions": str(loan.get("branch_instructions") or "").strip() or None,
                     "branch_visit_status": normalize_branch_visit_status(loan.get("branch_visit_status"), bool(loan.get("requires_branch_visit"))),
                     "collateral_types": normalize_text_list(loan.get("collateral_types")),
@@ -403,6 +484,7 @@ def admin_loans(request: HttpRequest):
             "requires_branch_visit": requires_branch_visit,
             "branch_name": str(body.get("branch_name") or "").strip() or None,
             "branch_location": str(body.get("branch_location") or "").strip() or None,
+            "target_county": clean_optional_text(body.get("target_county")) or clean_optional_text(profile.get("county")),
             "branch_instructions": str(body.get("branch_instructions") or "").strip() or None,
             "branch_visit_status": branch_visit_status,
             "collateral_types": collateral_types,
@@ -448,6 +530,8 @@ def admin_loan_detail(request: HttpRequest, loan_id: str):
             updates["branch_name"] = str(body.get("branch_name") or "").strip() or None
         if "branch_location" in body:
             updates["branch_location"] = str(body.get("branch_location") or "").strip() or None
+        if "target_county" in body:
+            updates["target_county"] = clean_optional_text(body.get("target_county"))
         if "branch_instructions" in body:
             updates["branch_instructions"] = str(body.get("branch_instructions") or "").strip() or None
         if "branch_visit_status" in body or "requires_branch_visit" in updates:

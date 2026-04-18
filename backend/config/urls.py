@@ -58,6 +58,8 @@ urlpatterns = [
     path("api/admin/users", legacy_view(views_admin.admin_users)),
     path("api/admin/users/<str:user_id>/role", legacy_view(views_admin.admin_user_role)),
     path("api/admin/orders", legacy_view(views_admin.admin_orders)),
+    path("api/admin/orders/<str:order_id>/confirm-delivery", legacy_view(views_admin.admin_order_confirm_delivery)),
+    path("api/admin/orders/<str:order_id>/release", legacy_view(views_admin.admin_order_release)),
     path("api/admin/loan-candidates", legacy_view(views_admin.admin_loan_candidates)),
     path("api/admin/loan-offers", legacy_view(views_admin.admin_loan_offers)),
     path("api/admin/loan-offers/<str:offer_id>", legacy_view(views_admin.admin_loan_offer_detail)),

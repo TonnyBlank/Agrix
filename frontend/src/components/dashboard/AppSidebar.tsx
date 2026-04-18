@@ -308,13 +308,13 @@ export function AppSidebar() {
     "User";
 
   const tierBadge =
-    isProRole(role)
-      ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
+    role === "company"
+      ? { label: "Company", cls: "bg-sky-500/18 text-sky-200" }
       : role === "admin"
         ? { label: "Admin", cls: "bg-sidebar-accent/70 text-sidebar-foreground" }
-        : role === "company"
-          ? { label: "Company", cls: "bg-sky-500/18 text-sky-200" }
-        : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
+        : isProRole(role)
+          ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
+          : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
 
   const dashboardHomeHref =
     role === "admin"

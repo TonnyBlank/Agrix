@@ -19,6 +19,7 @@ const initialForm = {
   price_per_unit: "",
   unit: "",
   stock: "",
+  image_emoji: "",
   cover_image_url: "",
   video_url: "",
   description: "",
@@ -39,6 +40,8 @@ export default function MyProducts() {
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [videoUploadProgress, setVideoUploadProgress] = useState(0);
+  const [imageUploadProgress, setImageUploadProgress] = useState(0);
   const [newProduct, setNewProduct] = useState(initialForm);
 
   const catalogSummary = useMemo(() => {
@@ -74,6 +77,8 @@ export default function MyProducts() {
     setVideoPreview(null);
     setImageFile(null);
     setImagePreview(null);
+    setVideoUploadProgress(0);
+    setImageUploadProgress(0);
     setEditingProductId(null);
   };
 
@@ -103,9 +108,11 @@ export default function MyProducts() {
     setVideoFile(file);
     if (file) {
       setVideoPreview(URL.createObjectURL(file));
+      setVideoUploadProgress(0);
       setNewProduct((current) => ({ ...current, video_url: "" }));
     } else {
       setVideoPreview(null);
+      setVideoUploadProgress(0);
     }
   };
 
@@ -114,9 +121,11 @@ export default function MyProducts() {
     setImageFile(file);
     if (file) {
       setImagePreview(URL.createObjectURL(file));
+      setImageUploadProgress(0);
       setNewProduct((current) => ({ ...current, cover_image_url: "" }));
     } else {
       setImagePreview(null);
+      setImageUploadProgress(0);
     }
   };
 
@@ -144,53 +153,56 @@ export default function MyProducts() {
     }
 
     setIsSaving(true);
-    let finalVideoUrl = newProduct.video_url.trim();
-    let finalCoverImageUrl = newProduct.cover_image_url.trim();
 
-    if (imageFile) {
-      const uploadedUrl = await uploadProductImage(imageFile);
-      if (!uploadedUrl) {
-        setIsSaving(false);
-        return;
+    try {
+      let finalVideoUrl = newProduct.video_url.trim();
+      let finalCoverImageUrl = newProduct.cover_image_url.trim();
+
+      if (imageFile) {
+        setImageUploadProgress(0);
+        const uploadedUrl = await uploadProductImage(imageFile, setImageUploadProgress);
+        if (!uploadedUrl) {
+          return;
+        }
+        finalCoverImageUrl = uploadedUrl;
       }
-      finalCoverImageUrl = uploadedUrl;
-    }
 
-    if (videoFile) {
-      const uploadedUrl = await uploadProductVideo(videoFile);
-      if (!uploadedUrl) {
-        setIsSaving(false);
-        return;
+      if (videoFile) {
+        setVideoUploadProgress(0);
+        const uploadedUrl = await uploadProductVideo(videoFile, setVideoUploadProgress);
+        if (!uploadedUrl) {
+          return;
+        }
+        finalVideoUrl = uploadedUrl;
       }
-      finalVideoUrl = uploadedUrl;
+
+      const payload = {
+        name: newProduct.name.trim(),
+        category: newProduct.category.trim(),
+        price_per_unit: Number(newProduct.price_per_unit) || 0,
+        unit: newProduct.unit.trim(),
+        stock: Number(newProduct.stock) || 0,
+        description: newProduct.description.trim() || undefined,
+        image_emoji: newProduct.image_emoji.trim() || undefined,
+        cover_image_url: finalCoverImageUrl || undefined,
+        video_url: finalVideoUrl || undefined,
+        is_organic: newProduct.is_organic,
+      };
+
+      const success = editingProductId
+        ? await updateProduct(editingProductId, payload)
+        : await addProduct(payload);
+
+      if (!success) return;
+
+      setIsAddOpen(false);
+      resetForm();
+    } catch (error) {
+      console.error("Failed to publish product", error);
+      toast.error("Something went wrong while publishing. Please try again.");
+    } finally {
+      setIsSaving(false);
     }
-
-    const payload = {
-      name: newProduct.name.trim(),
-      category: newProduct.category.trim(),
-      price_per_unit: Number(newProduct.price_per_unit) || 0,
-      unit: newProduct.unit.trim(),
-      stock: Number(newProduct.stock) || 0,
-      description: newProduct.description.trim() || undefined,
-      image_emoji: newProduct.image_emoji.trim() || undefined,
-      cover_image_url: finalCoverImageUrl || undefined,
-      video_url: finalVideoUrl || undefined,
-      is_organic: newProduct.is_organic,
-    };
-
-    let success = false;
-    if (editingProductId) {
-      success = await updateProduct(editingProductId, payload);
-    } else {
-      success = await addProduct(payload);
-    }
-
-    setIsSaving(false);
-
-    if (!success) return;
-
-    setIsAddOpen(false);
-    resetForm();
   };
 
   return (
@@ -393,6 +405,21 @@ export default function MyProducts() {
                       />
                     </div>
                   )}
+
+                  {imageFile && isSaving && imageUploadProgress > 0 && imageUploadProgress < 100 && (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                        <span>Uploading cover image...</span>
+                        <span>{imageUploadProgress}%</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-emerald-100 dark:bg-emerald-500/15">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                          style={{ width: `${imageUploadProgress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-[1.5rem] border border-dashed border-emerald-300/80 bg-emerald-50/60 p-4 dark:border-emerald-500/30 dark:bg-emerald-500/10">
@@ -415,6 +442,21 @@ export default function MyProducts() {
                         controls
                         className="aspect-video max-h-[280px] w-full object-contain"
                       />
+                    </div>
+                  )}
+
+                  {videoFile && isSaving && (
+                    <div className="mt-4 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                        <span>{videoUploadProgress >= 100 ? "Finishing upload..." : "Uploading video..."}</span>
+                        <span>{videoUploadProgress}%</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-emerald-100 dark:bg-emerald-500/15">
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                          style={{ width: `${Math.min(videoUploadProgress, 100)}%` }}
+                        />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -447,7 +489,15 @@ export default function MyProducts() {
                   </Button>
                   <Button onClick={() => void handleAddProduct()} className="rounded-xl" disabled={isSaving}>
                     {isSaving ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <BadgePlus className="mr-2 h-4 w-4" />}
-                    {isSaving ? (editingProductId ? "Saving..." : "Publishing...") : editingProductId ? "Save Changes" : "Publish to Marketplace"}
+                    {isSaving
+                      ? videoFile && videoUploadProgress > 0 && videoUploadProgress < 100
+                        ? `Uploading Video ${videoUploadProgress}%`
+                        : editingProductId
+                          ? "Saving..."
+                          : "Publishing..."
+                      : editingProductId
+                        ? "Save Changes"
+                        : "Publish to Marketplace"}
                   </Button>
                 </DialogFooter>
               </DialogContent>

@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { normalizeKenyanPhone, sanitizeDigits, sanitizePhoneInput } from "@/lib/inputSanitizers";
 
 export default function Profile() {
   const { profile, refreshProfile, user, applyProfileUpdate, role } = useAuth();
@@ -146,7 +147,7 @@ export default function Profile() {
   useEffect(() => {
     if (!pendingPhoneVerification) return;
 
-    const normalizedProfilePhone = normalizePhone(profile?.phone || "");
+    const normalizedProfilePhone = normalizeKenyanPhone(profile?.phone || "");
     if (normalizedProfilePhone && normalizedProfilePhone === pendingPhoneVerification) {
       setPendingPhoneVerification(null);
       setPhoneOtpCode("");
@@ -161,19 +162,6 @@ export default function Profile() {
     };
   }, [localPhotoPreview]);
 
-  const normalizePhone = (value: string) => {
-    const digits = value.replace(/\D+/g, "");
-
-    if (!digits) return "";
-    if (digits.startsWith("254") && digits.length === 12) return `+${digits}`;
-    if (digits.startsWith("0") && digits.length === 10) return `+254${digits.slice(1)}`;
-    if (digits.startsWith("7") && digits.length === 9) return `+254${digits}`;
-    if (digits.startsWith("1") && digits.length === 9) return `+254${digits}`;
-    if (value.trim().startsWith("+") && digits.length >= 10) return `+${digits}`;
-
-    return value.trim();
-  };
-
   const buildProfilePayload = (phoneOverride?: string | null) => ({
     full_name: profileForm.full_name,
     phone: phoneOverride ?? profileForm.phone,
@@ -184,9 +172,9 @@ export default function Profile() {
     bank_account_number: profileForm.payout_method === "bank" ? profileForm.bank_account_number : null,
   });
 
-  const currentPhone = normalizePhone(profile?.phone || "");
-  const formPhone = normalizePhone(profileForm.phone);
-  const verifiedAuthPhone = normalizePhone(user?.phone || "");
+  const currentPhone = normalizeKenyanPhone(profile?.phone || "");
+  const formPhone = normalizeKenyanPhone(profileForm.phone);
+  const verifiedAuthPhone = normalizeKenyanPhone(user?.phone || "");
   const phoneChanged = formPhone !== currentPhone;
   const phoneVerified =
     Boolean(user?.phone_confirmed_at) &&
@@ -220,7 +208,7 @@ export default function Profile() {
   };
 
   const handleSendPhoneOtp = async () => {
-    const normalizedPhone = normalizePhone(profileForm.phone);
+    const normalizedPhone = normalizeKenyanPhone(profileForm.phone);
 
     if (!normalizedPhone || !normalizedPhone.startsWith("+254")) {
       toast.error("Enter a valid Kenyan phone number like 0712345678 or +254712345678.");
@@ -531,7 +519,9 @@ export default function Profile() {
                     <Label>Phone</Label>
                     <Input
                       value={profileForm.phone}
-                      onChange={(e) => setProfileForm({ ...profileForm, phone: e.target.value })}
+                      onChange={(e) => setProfileForm({ ...profileForm, phone: sanitizePhoneInput(e.target.value) })}
+                      type="tel"
+                      inputMode="tel"
                       placeholder="0712345678 or +254712345678"
                       className="rounded-xl"
                     />
@@ -639,7 +629,11 @@ export default function Profile() {
                       <Label>M-Pesa Number</Label>
                       <Input
                         value={profileForm.payout_mpesa_number}
-                        onChange={(e) => setProfileForm({ ...profileForm, payout_mpesa_number: e.target.value })}
+                        onChange={(e) =>
+                          setProfileForm({ ...profileForm, payout_mpesa_number: sanitizePhoneInput(e.target.value) })
+                        }
+                        type="tel"
+                        inputMode="tel"
                         placeholder="2547XXXXXXXX"
                         className="rounded-xl"
                       />
@@ -658,7 +652,17 @@ export default function Profile() {
                       </div>
                       <div className="space-y-2 md:col-span-2">
                         <Label>Account Number</Label>
-                        <Input value={profileForm.bank_account_number} onChange={(e) => setProfileForm({ ...profileForm, bank_account_number: e.target.value })} className="rounded-xl" />
+                        <Input
+                          value={profileForm.bank_account_number}
+                          onChange={(e) =>
+                            setProfileForm({
+                              ...profileForm,
+                              bank_account_number: sanitizeDigits(e.target.value, { maxLength: 20 }),
+                            })
+                          }
+                          inputMode="numeric"
+                          className="rounded-xl"
+                        />
                       </div>
                     </div>
                   )}

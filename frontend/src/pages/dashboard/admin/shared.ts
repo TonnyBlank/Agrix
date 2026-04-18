@@ -55,6 +55,7 @@ export type AdminLoan = {
   requires_branch_visit: boolean;
   branch_name: string | null;
   branch_location: string | null;
+  target_county: string | null;
   branch_instructions: string | null;
   branch_visit_status: BranchVisitStatus;
   collateral_types: string[];
@@ -81,6 +82,7 @@ export type AdminLoanOffer = {
   requires_branch_visit: boolean;
   branch_name: string | null;
   branch_location: string | null;
+  target_county: string | null;
   branch_instructions: string | null;
   collateral_types: string[];
   required_documents: string[];
@@ -102,11 +104,22 @@ export type AdminLoanCandidate = {
 
 export type AdminOrder = {
   id: string;
+  status?: string;
   total_price: number;
   delivery_fee?: number | null;
   payment_status: string;
   payment_ref?: string | null;
   paid_at?: string | null;
+  escrow_amount?: number | null;
+  agrilink_commission_rate?: number | null;
+  agrilink_commission_amount?: number | null;
+  seller_payout_amount?: number | null;
+  payout_status?: string | null;
+  escrow_received_at?: string | null;
+  official_verified_at?: string | null;
+  official_verified_by?: string | null;
+  official_note?: string | null;
+  payout_released_at?: string | null;
   created_at: string;
   product: { name: string | null } | null;
   buyer_profile: { full_name: string | null } | null;
@@ -132,6 +145,7 @@ export type LoanOfferFormState = {
   requires_branch_visit: boolean;
   branch_name: string;
   branch_location: string;
+  target_county: string;
   branch_instructions: string;
   collateral_types_input: string;
   required_documents_input: string;
@@ -160,6 +174,7 @@ export const initialLoanOfferForm: LoanOfferFormState = {
   requires_branch_visit: false,
   branch_name: "",
   branch_location: "",
+  target_county: "",
   branch_instructions: "",
   collateral_types_input: "",
   required_documents_input: "",

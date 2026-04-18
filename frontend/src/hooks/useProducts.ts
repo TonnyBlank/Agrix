@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
-import { apiFetch } from "@/lib/api";
+import { ApiError, API_BASE_URL, apiFetch } from "@/lib/api";
+import { getStoredRole } from "@/lib/subscription";
 import { supabase } from "@/integrations/supabase/client";
 
 const PRODUCTS_CHANGED_EVENT = "agrilink:products-changed";
@@ -18,6 +19,83 @@ const myProductsCache = new Map<string, ProductSnapshot>();
 function notifyProductsChanged() {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(PRODUCTS_CHANGED_EVENT));
+}
+
+type UploadProgressCallback = (progress: number) => void;
+
+async function uploadMediaWithProgress(
+  path: string,
+  fieldName: string,
+  file: File,
+  onProgress?: UploadProgressCallback,
+) {
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session?.access_token) {
+    throw new ApiError("You are not signed in. Please log in and try again.", 401);
+  }
+
+  const formData = new FormData();
+  formData.append(fieldName, file);
+
+  return new Promise<{ url: string }>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `${API_BASE_URL}${path}`);
+    request.responseType = "json";
+    request.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+
+    const localRole = getStoredRole(session.user.id);
+    if (localRole) {
+      request.setRequestHeader("X-AgriLink-Role", localRole);
+    }
+
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+
+    request.onerror = () => {
+      reject(new ApiError("Network request failed", 0));
+    };
+
+    request.onload = () => {
+      const rawResponse = request.response ?? request.responseText;
+
+      if (request.status >= 200 && request.status < 300) {
+        if (rawResponse && typeof rawResponse === "object") {
+          onProgress?.(100);
+          resolve(rawResponse as { url: string });
+          return;
+        }
+
+        try {
+          const parsed = typeof rawResponse === "string" ? JSON.parse(rawResponse) : rawResponse;
+          onProgress?.(100);
+          resolve(parsed as { url: string });
+        } catch {
+          reject(new ApiError("Invalid upload response from server", request.status));
+        }
+        return;
+      }
+
+      let message = `Request failed with status ${request.status}`;
+      if (rawResponse && typeof rawResponse === "object") {
+        const payload = rawResponse as { error?: string; message?: string };
+        message = payload.error || payload.message || message;
+      } else if (typeof rawResponse === "string" && rawResponse.trim()) {
+        try {
+          const payload = JSON.parse(rawResponse) as { error?: string; message?: string };
+          message = payload.error || payload.message || message;
+        } catch {
+          message = rawResponse;
+        }
+      }
+
+      reject(new ApiError(message, request.status));
+    };
+
+    request.send(formData);
+  });
 }
 
 async function loadProfilesByUserId(userIds: string[]) {
@@ -274,7 +352,8 @@ export function useMyProducts() {
       });
       toast.success("Listing published to marketplace!");
       notifyProductsChanged();
-      await load(true);
+      // Fire-and-forget: don't block UI on list refresh
+      void load(true);
       return true;
     } catch (error) {
       toast.error(`Failed to add product: ${(error as Error).message}`);
@@ -282,17 +361,11 @@ export function useMyProducts() {
     }
   };
 
-  const uploadProductVideo = async (file: File) => {
+  const uploadProductVideo = async (file: File, onProgress?: UploadProgressCallback) => {
     if (!user) return null;
 
-    const formData = new FormData();
-    formData.append("video", file);
-
     try {
-      const data = await apiFetch<{ url: string }>("/products/upload-video", {
-        method: "POST",
-        body: formData,
-      });
+      const data = await uploadMediaWithProgress("/products/upload-video", "video", file, onProgress);
       toast.success("Video uploaded successfully!");
       return data.url;
     } catch (error) {
@@ -301,17 +374,11 @@ export function useMyProducts() {
     }
   };
 
-  const uploadProductImage = async (file: File) => {
+  const uploadProductImage = async (file: File, onProgress?: UploadProgressCallback) => {
     if (!user) return null;
 
-    const formData = new FormData();
-    formData.append("image", file);
-
     try {
-      const data = await apiFetch<{ url: string }>("/products/upload-image", {
-        method: "POST",
-        body: formData,
-      });
+      const data = await uploadMediaWithProgress("/products/upload-image", "image", file, onProgress);
       toast.success("Cover image uploaded successfully!");
       return data.url;
     } catch (error) {
@@ -328,7 +395,8 @@ export function useMyProducts() {
       });
       toast.success("Product updated!");
       notifyProductsChanged();
-      await load(true);
+      // Fire-and-forget: don't block UI on list refresh
+      void load(true);
       return true;
     } catch (error) {
       toast.error("Failed to update product");

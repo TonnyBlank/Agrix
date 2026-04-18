@@ -434,6 +434,7 @@ alter table public.micro_loan_offers
   add column if not exists requires_branch_visit boolean not null default false,
   add column if not exists branch_name text,
   add column if not exists branch_location text,
+  add column if not exists target_county text,
   add column if not exists branch_instructions text,
   add column if not exists collateral_types jsonb not null default '[]'::jsonb,
   add column if not exists required_documents jsonb not null default '[]'::jsonb;
@@ -455,6 +456,7 @@ alter table public.micro_loan_applications
   add column if not exists requires_branch_visit boolean not null default false,
   add column if not exists branch_name text,
   add column if not exists branch_location text,
+  add column if not exists target_county text,
   add column if not exists branch_instructions text,
   add column if not exists branch_visit_status text not null default 'not_required',
   add column if not exists collateral_types jsonb not null default '[]'::jsonb,
@@ -467,6 +469,17 @@ alter table public.micro_loan_applications
 alter table public.micro_loan_applications
   add constraint micro_loan_applications_security_type_check
   check (security_type in ('unsecured', 'guarantor', 'collateral'));
+
+update public.micro_loan_offers
+set target_county = coalesce(target_county, nullif(trim(branch_location), ''))
+where target_county is null;
+
+update public.micro_loan_applications
+set target_county = coalesce(target_county, nullif(trim(branch_location), ''))
+where target_county is null;
+
+create index if not exists micro_loan_offers_role_county_active_created_idx
+  on public.micro_loan_offers (applicant_role, target_county, is_active, created_at desc);
 
 alter table public.micro_loan_applications
   drop constraint if exists micro_loan_applications_branch_visit_status_check;
@@ -623,6 +636,51 @@ alter table public.orders
 add column if not exists paid_at timestamptz;
 
 create index if not exists orders_checkout_request_id_idx on public.orders(checkout_request_id);
+alter table public.orders
+add column if not exists escrow_amount numeric(10,2) not null default 0;
+
+alter table public.orders
+add column if not exists agrilink_commission_rate numeric(6,4) not null default 0.05;
+
+alter table public.orders
+add column if not exists agrilink_commission_amount numeric(10,2) not null default 0;
+
+alter table public.orders
+add column if not exists seller_payout_amount numeric(10,2) not null default 0;
+
+alter table public.orders
+add column if not exists payout_status text not null default 'pending_payment'
+  check (payout_status in ('pending_payment', 'awaiting_delivery', 'awaiting_official_signoff', 'released', 'cancelled'));
+
+alter table public.orders
+add column if not exists escrow_received_at timestamptz;
+
+alter table public.orders
+add column if not exists official_verified_at timestamptz;
+
+alter table public.orders
+add column if not exists official_verified_by uuid references auth.users(id) on delete set null;
+
+alter table public.orders
+add column if not exists official_note text;
+
+alter table public.orders
+add column if not exists payout_released_at timestamptz;
+
+update public.orders
+set
+  escrow_amount = round(coalesce(total_price, 0) + coalesce(delivery_fee, 0), 2),
+  agrilink_commission_rate = 0.05,
+  agrilink_commission_amount = round(coalesce(total_price, 0) * 0.05, 2),
+  seller_payout_amount = round(greatest(coalesce(total_price, 0) - (coalesce(total_price, 0) * 0.05), 0), 2),
+  payout_status = case
+    when status = 'cancelled' then 'cancelled'
+    when payment_status = 'paid' and status = 'delivered' then 'awaiting_official_signoff'
+    when payment_status = 'paid' then 'awaiting_delivery'
+    else 'pending_payment'
+  end,
+  escrow_received_at = case when payment_status = 'paid' then coalesce(escrow_received_at, paid_at, created_at) else escrow_received_at end
+where true;
 alter table public.profiles
 add column if not exists payout_method text
   check (payout_method in ('mpesa', 'bank'));

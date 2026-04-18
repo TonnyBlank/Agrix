@@ -215,7 +215,7 @@ export default function AdminLoanDecisions() {
   const normalizedLoanSearch = loanSearch.trim().toLowerCase();
   const filteredLoans = useMemo(() => loans.filter((loan) => {
     const type = inferLoanType(loan);
-    const haystack = [loan.id, loan.product_title, loan.status, loan.note, loan.security_type, loan.branch_name, loan.branch_location, loan.branch_visit_status, ...(loan.collateral_types ?? []), ...(loan.required_documents ?? []), LOAN_PRODUCT_TITLES[type], loan.profile?.full_name, loan.profile?.county]
+    const haystack = [loan.id, loan.product_title, loan.status, loan.note, loan.security_type, loan.branch_name, loan.branch_location, loan.target_county, loan.branch_visit_status, ...(loan.collateral_types ?? []), ...(loan.required_documents ?? []), LOAN_PRODUCT_TITLES[type], loan.profile?.full_name, loan.profile?.county]
       .filter(Boolean)
       .join(" ")
       .toLowerCase();
@@ -312,6 +312,11 @@ export default function AdminLoanDecisions() {
                 <span className={`rounded-full px-3 py-1 font-semibold uppercase tracking-[0.14em] ${loanTypeTone(inferLoanType(selectedLoan))}`}>{LOAN_PRODUCT_TITLES[inferLoanType(selectedLoan)]}</span>
                 <span className={`rounded-full px-3 py-1 font-semibold uppercase tracking-[0.14em] ${securityTone(selectedLoan.security_type)}`}>{selectedLoan.security_type}</span>
                 <span className="rounded-full bg-primary/10 px-3 py-1 font-semibold uppercase tracking-[0.14em] text-primary">{selectedLoan.status.replace("_", " ")}</span>
+                {selectedLoan.target_county ? (
+                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 font-semibold uppercase tracking-[0.14em] text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-300">
+                    {selectedLoan.target_county}
+                  </span>
+                ) : null}
                 {selectedLoan.requires_branch_visit ? (
                   <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 font-semibold uppercase tracking-[0.14em] text-amber-800">
                     {selectedLoan.branch_visit_status.replaceAll("_", " ")}
@@ -319,9 +324,9 @@ export default function AdminLoanDecisions() {
                 ) : null}
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <input value={selectedLoan.approved_amount ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, approved_amount: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Approved amount" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
-                <input value={selectedLoan.interest_rate ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, interest_rate: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Interest rate" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
-                <input value={selectedLoan.repayment_days ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, repayment_days: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Repayment days" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
+                <input type="number" inputMode="decimal" min="0" step="0.01" value={selectedLoan.approved_amount ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, approved_amount: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Approved amount" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
+                <input type="number" inputMode="decimal" min="0" step="0.01" value={selectedLoan.interest_rate ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, interest_rate: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Interest rate" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
+                <input type="number" inputMode="numeric" min="0" step="1" value={selectedLoan.repayment_days ?? ""} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, repayment_days: event.target.value ? Number(event.target.value) : null } : item)))} placeholder="Repayment days" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground" />
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <select value={selectedLoan.security_type} onChange={(event) => setLoans((current) => current.map((item) => (item.id === selectedLoan.id ? { ...item, security_type: event.target.value as LoanSecurityType } : item)))} className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground">{LOAN_SECURITY_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}</select>

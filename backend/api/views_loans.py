@@ -87,6 +87,19 @@ def normalize_security_type(value: Any) -> str:
     return selected if selected in LOAN_SECURITY_TYPES else "unsecured"
 
 
+def clean_optional_text(value: Any) -> str | None:
+    return str(value or "").strip() or None
+
+
+def normalize_county_text(value: Any) -> str | None:
+    cleaned = clean_optional_text(value)
+    return cleaned.lower() if cleaned else None
+
+
+def resolve_offer_target_county(offer: dict[str, Any]) -> str | None:
+    return clean_optional_text(offer.get("target_county")) or clean_optional_text(offer.get("branch_location"))
+
+
 def loan_requires_manual_review(security_type: str, requires_branch_visit: bool) -> bool:
     return requires_branch_visit or security_type != "unsecured"
 
@@ -145,6 +158,7 @@ def serialize_loan_offer(offer: dict[str, Any], available_amount: float, eligibi
         "security_type": security_type,
         "branch_name": str(offer.get("branch_name") or "").strip() or None,
         "branch_location": str(offer.get("branch_location") or "").strip() or None,
+        "target_county": resolve_offer_target_county(offer),
         "branch_instructions": str(offer.get("branch_instructions") or "").strip() or None,
         "collateral_types": normalize_text_list(offer.get("collateral_types")),
         "required_documents": normalize_text_list(offer.get("required_documents")),
@@ -171,6 +185,7 @@ def serialize_loan_application(loan: dict[str, Any], repayments: list[dict[str, 
         "security_type": normalize_security_type(loan.get("security_type")),
         "branch_name": str(loan.get("branch_name") or "").strip() or None,
         "branch_location": str(loan.get("branch_location") or "").strip() or None,
+        "target_county": clean_optional_text(loan.get("target_county")) or clean_optional_text(loan.get("branch_location")),
         "branch_instructions": str(loan.get("branch_instructions") or "").strip() or None,
         "branch_visit_status": normalize_branch_visit_status(loan.get("branch_visit_status"), bool(loan.get("requires_branch_visit"))),
         "collateral_types": normalize_text_list(loan.get("collateral_types")),
@@ -273,19 +288,25 @@ def micro_loan_offers(request: HttpRequest):
     role = resolve_app_role(request.supabase, request.user_id, request.requested_role)
     if role not in {"farmer_pro", "company"}:
         return JsonResponse([], safe=False)
-    offers, _ = request.supabase.select("micro_loan_offers", filters={"is_active": "eq.true", "applicant_role": f"eq.{role}"}, order="created_at.desc")
     profile, _ = request.supabase.select(
         "profiles",
         select="full_name, phone, county, payout_method, payout_mpesa_number, bank_name, bank_account_name, bank_account_number",
         filters={"user_id": f"eq.{request.user_id}"},
         single=True,
     )
+    borrower_county = normalize_county_text((profile or {}).get("county"))
+    offers, _ = request.supabase.select("micro_loan_offers", filters={"is_active": "eq.true", "applicant_role": f"eq.{role}"}, order="created_at.desc")
+    matching_offers = [
+        offer
+        for offer in offers or []
+        if borrower_county and normalize_county_text(resolve_offer_target_county(offer)) == borrower_county
+    ]
     verification, _ = request.supabase.select("id_verifications", select="status", filters={"user_id": f"eq.{request.user_id}"}, single=True)
     eligibility_orders = fetch_eligibility_orders(request.supabase, role, request.user_id)
     eligibility = compute_loan_eligibility(role, profile, (verification or {}).get("status"), eligibility_orders)
     outstanding = fetch_outstanding_loan_balance(request.supabase, request.user_id) if eligibility["isEligible"] else 0
     available = max(0, eligibility["eligibleAmount"] - outstanding)
-    rows = [serialize_loan_offer(offer, available, eligibility, outstanding) for offer in offers or []]
+    rows = [serialize_loan_offer(offer, available, eligibility, outstanding) for offer in matching_offers]
     return JsonResponse(rows, safe=False)
 
 
@@ -319,12 +340,18 @@ def micro_loan_applications(request: HttpRequest):
         requested_amount = float(body.get("requestedAmount"))
     except (TypeError, ValueError):
         raise ApiException("Requested amount must be a valid number.", 400)
+    if requested_amount <= 0:
+        raise ApiException("Requested amount must be greater than zero.", 400)
     profile, _ = request.supabase.select(
         "profiles",
         select="full_name, phone, county, payout_method, payout_mpesa_number, bank_name, bank_account_name, bank_account_number",
         filters={"user_id": f"eq.{request.user_id}"},
         single=True,
     )
+    borrower_county = clean_optional_text((profile or {}).get("county"))
+    normalized_borrower_county = normalize_county_text(borrower_county)
+    if not normalized_borrower_county:
+        raise ApiException("Add your county on your profile before applying for a county-based loan.", 400)
     verification, _ = request.supabase.select("id_verifications", select="status", filters={"user_id": f"eq.{request.user_id}"}, single=True)
     eligibility_orders = fetch_eligibility_orders(request.supabase, role, request.user_id)
     eligibility = compute_loan_eligibility(role, profile, (verification or {}).get("status"), eligibility_orders)
@@ -346,6 +373,12 @@ def micro_loan_applications(request: HttpRequest):
         speed = offer.get("speed")
         interest_rate = float(offer.get("interest_rate") or 0)
         repayment_days = int(offer.get("repayment_days") or 0)
+        target_county = resolve_offer_target_county(offer)
+        normalized_target_county = normalize_county_text(target_county)
+        if not normalized_target_county:
+            raise ApiException("This loan offer is missing a target county. Ask admin to update it first.", 400)
+        if normalized_target_county != normalized_borrower_county:
+            raise ApiException(f"This loan is only available to borrowers registered in {target_county}.", 403)
         max_allowed = min(available_amount, float(offer.get("max_amount") or 0))
         security_type = normalize_security_type(offer.get("security_type"))
         requires_branch_visit = bool(offer.get("requires_branch_visit"))
@@ -371,6 +404,7 @@ def micro_loan_applications(request: HttpRequest):
         requires_branch_visit = False
         branch_name = None
         branch_location = None
+        target_county = borrower_county
         branch_instructions = None
         collateral_types = []
         required_documents = []
@@ -444,6 +478,7 @@ def micro_loan_applications(request: HttpRequest):
             "requires_branch_visit": requires_branch_visit,
             "branch_name": branch_name,
             "branch_location": branch_location,
+            "target_county": target_county,
             "branch_instructions": branch_instructions,
             "branch_visit_status": branch_visit_status,
             "collateral_types": collateral_types,

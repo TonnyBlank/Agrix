@@ -31,6 +31,16 @@ export type Order = {
   checkout_request_id?: string | null;
   payment_error?: string | null;
   paid_at?: string | null;
+  escrow_amount?: number | null;
+  agrilink_commission_rate?: number | null;
+  agrilink_commission_amount?: number | null;
+  seller_payout_amount?: number | null;
+  payout_status?: string | null;
+  escrow_received_at?: string | null;
+  official_verified_at?: string | null;
+  official_verified_by?: string | null;
+  official_note?: string | null;
+  payout_released_at?: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;

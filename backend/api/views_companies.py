@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import requests
 
@@ -17,12 +18,73 @@ from .common import (
     postgrest_in,
     parse_json_body,
     build_safe_storage_path,
+    normalize_kenyan_phone,
     method_not_allowed,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 
 
 logger = logging.getLogger(__name__)
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _clean_required_text(value: Any, field_label: str) -> str:
+    text = _clean_optional_text(value)
+    if not text:
+        raise ApiException(f"{field_label} is required.", 400)
+    return text
+
+
+def _normalize_optional_email(value: Any) -> str | None:
+    email = _clean_optional_text(value)
+    if not email:
+        return None
+    if "@" not in email or "." not in email.split("@")[-1]:
+        raise ApiException("Email must be a valid email address.", 400)
+    return email.lower()
+
+
+def _normalize_optional_website(value: Any) -> str | None:
+    website = _clean_optional_text(value)
+    if not website:
+        return None
+    normalized = website if website.startswith(("http://", "https://")) else f"https://{website}"
+    parsed = urlparse(normalized)
+    if not parsed.scheme or not parsed.netloc:
+        raise ApiException("Website must be a valid URL.", 400)
+    return normalized
+
+
+def _normalize_optional_company_phone(value: Any) -> str | None:
+    phone = _clean_optional_text(value)
+    if not phone:
+        return None
+    return f"+{normalize_kenyan_phone(phone)}"
+
+
+def _normalize_string_list(value: Any, field_label: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ApiException(f"{field_label} must be a list of text values.", 400)
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def _parse_non_negative_number(value: Any, field_label: str, *, allow_zero: bool = True) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ApiException(f"{field_label} must be a valid number.", 400)
+
+    if parsed < 0 or (not allow_zero and parsed <= 0):
+        comparator = "greater than 0" if not allow_zero else "0 or more"
+        raise ApiException(f"{field_label} must be {comparator}.", 400)
+
+    return parsed
 
 
 def api_exception_response(exc: ApiException) -> JsonResponse:
@@ -178,17 +240,17 @@ def companies_create(request: HttpRequest):
         # Create company profile
         company_data = {
             "user_id": user.get("id"),
-            "company_name": data.get("company_name"),
-            "company_type": data.get("company_type", "other"),
-            "registration_number": data.get("registration_number"),
-            "tax_id": data.get("tax_id"),
-            "phone": data.get("phone"),
-            "email": data.get("email"),
-            "website": data.get("website"),
-            "bio": data.get("bio"),
-            "headquarters_location": data.get("headquarters_location"),
-            "service_areas": data.get("service_areas", []),
-            "certifications": data.get("certifications", []),
+            "company_name": _clean_required_text(data.get("company_name"), "Company name"),
+            "company_type": _clean_optional_text(data.get("company_type")) or "other",
+            "registration_number": _clean_optional_text(data.get("registration_number")),
+            "tax_id": _clean_optional_text(data.get("tax_id")),
+            "phone": _normalize_optional_company_phone(data.get("phone")),
+            "email": _normalize_optional_email(data.get("email")),
+            "website": _normalize_optional_website(data.get("website")),
+            "bio": _clean_optional_text(data.get("bio")),
+            "headquarters_location": _clean_optional_text(data.get("headquarters_location")),
+            "service_areas": _normalize_string_list(data.get("service_areas"), "Service areas"),
+            "certifications": _normalize_string_list(data.get("certifications"), "Certifications"),
         }
         
         result = client.insert("companies", [company_data])
@@ -197,6 +259,8 @@ def companies_create(request: HttpRequest):
             "company": result[0] if result else company_data,
             "success": True,
         })
+    except ApiException as exc:
+        return api_exception_response(exc)
     except Exception as e:
         logger.error(f"Error creating company: {e}")
         return JsonResponse({"error": "Failed to create company"}, status=500)
@@ -293,9 +357,28 @@ def company_me_update(request: HttpRequest):
         ]
         
         for field in allowed_fields:
-            if field in data:
-                update_data[field] = data[field]
-        
+            if field not in data:
+                continue
+            if field == "company_name":
+                update_data[field] = _clean_required_text(data.get(field), "Company name")
+            elif field == "company_type":
+                update_data[field] = _clean_optional_text(data.get(field)) or "other"
+            elif field in {"registration_number", "tax_id", "bio", "logo_url", "cover_image_url", "headquarters_location", "payout_method", "bank_name", "bank_account_name"}:
+                update_data[field] = _clean_optional_text(data.get(field))
+            elif field == "phone" or field == "payout_mpesa_number":
+                update_data[field] = _normalize_optional_company_phone(data.get(field))
+            elif field == "email":
+                update_data[field] = _normalize_optional_email(data.get(field))
+            elif field == "website":
+                update_data[field] = _normalize_optional_website(data.get(field))
+            elif field == "bank_account_number":
+                bank_account_number = _clean_optional_text(data.get(field))
+                if bank_account_number and not bank_account_number.isdigit():
+                    raise ApiException("Bank account number must contain digits only.", 400)
+                update_data[field] = bank_account_number
+            elif field in {"service_areas", "certifications"}:
+                update_data[field] = _normalize_string_list(data.get(field), field.replace("_", " ").title())
+
         if not update_data:
             return JsonResponse({"error": "No valid fields to update"}, status=400)
         
@@ -473,16 +556,16 @@ def company_products_create(request: HttpRequest):
         
         product_data = {
             "company_id": company_id,
-            "name": data.get("name"),
-            "category": data.get("category", "other"),
-            "description": data.get("description"),
-            "price_per_unit": data.get("price_per_unit", 0),
-            "unit": data.get("unit", "kg"),
-            "minimum_order_quantity": data.get("minimum_order_quantity", 1),
-            "stock": data.get("stock", 0),
+            "name": _clean_required_text(data.get("name"), "Product name"),
+            "category": _clean_optional_text(data.get("category")) or "other",
+            "description": _clean_optional_text(data.get("description")),
+            "price_per_unit": _parse_non_negative_number(data.get("price_per_unit", 0), "Price per unit"),
+            "unit": _clean_optional_text(data.get("unit")) or "kg",
+            "minimum_order_quantity": _parse_non_negative_number(data.get("minimum_order_quantity", 1), "Minimum order quantity", allow_zero=False),
+            "stock": _parse_non_negative_number(data.get("stock", 0), "Stock"),
             "bulk_discount_tiers": data.get("bulk_discount_tiers", []),
-            "image_url": data.get("image_url"),
-            "is_available": data.get("is_available", True),
+            "image_url": _clean_optional_text(data.get("image_url")),
+            "is_available": bool(data.get("is_available", True)),
         }
         
         result = client.insert("company_products", [product_data])
@@ -532,7 +615,30 @@ def company_product_update(request: HttpRequest, product_id: str):
             "image_url",
             "is_available",
         ]
-        update_data = {field: data[field] for field in allowed_fields if field in data}
+        update_data = {}
+        for field in allowed_fields:
+            if field not in data:
+                continue
+            if field == "name":
+                update_data[field] = _clean_required_text(data.get(field), "Product name")
+            elif field == "category":
+                update_data[field] = _clean_optional_text(data.get(field)) or "other"
+            elif field == "description":
+                update_data[field] = _clean_optional_text(data.get(field))
+            elif field == "price_per_unit":
+                update_data[field] = _parse_non_negative_number(data.get(field), "Price per unit")
+            elif field == "unit":
+                update_data[field] = _clean_optional_text(data.get(field)) or "kg"
+            elif field == "minimum_order_quantity":
+                update_data[field] = _parse_non_negative_number(data.get(field), "Minimum order quantity", allow_zero=False)
+            elif field == "stock":
+                update_data[field] = _parse_non_negative_number(data.get(field), "Stock")
+            elif field == "image_url":
+                update_data[field] = _clean_optional_text(data.get(field))
+            elif field == "is_available":
+                update_data[field] = bool(data.get(field))
+            else:
+                update_data[field] = data[field]
         if not update_data:
             return JsonResponse({"error": "No valid fields to update"}, status=400)
 

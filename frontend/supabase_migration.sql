@@ -241,6 +241,17 @@ CREATE TABLE IF NOT EXISTS public.orders (
   checkout_request_id text,
   payment_error text,
   paid_at timestamptz,
+  escrow_amount numeric(10,2) NOT NULL DEFAULT 0,
+  agrilink_commission_rate numeric(6,4) NOT NULL DEFAULT 0.05,
+  agrilink_commission_amount numeric(10,2) NOT NULL DEFAULT 0,
+  seller_payout_amount numeric(10,2) NOT NULL DEFAULT 0,
+  payout_status text NOT NULL DEFAULT 'pending_payment'
+    CHECK (payout_status IN ('pending_payment', 'awaiting_delivery', 'awaiting_official_signoff', 'released', 'cancelled')),
+  escrow_received_at timestamptz,
+  official_verified_at timestamptz,
+  official_verified_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  official_note text,
+  payout_released_at timestamptz,
   notes text,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
@@ -424,6 +435,10 @@ DECLARE
   v_product public.products%ROWTYPE;
   v_order public.orders%ROWTYPE;
   v_unit text;
+  v_subtotal numeric(10,2);
+  v_escrow_amount numeric(10,2);
+  v_commission_amount numeric(10,2);
+  v_seller_payout_amount numeric(10,2);
 BEGIN
   IF v_buyer_id IS NULL THEN
     RAISE EXCEPTION 'You must be signed in to place an order';
@@ -460,15 +475,22 @@ BEGIN
   END IF;
 
   v_unit := COALESCE(NULLIF(trim(p_unit), ''), v_product.unit);
+  v_subtotal := round(v_product.price_per_unit * p_quantity, 2);
+  v_escrow_amount := round(v_subtotal + p_delivery_fee, 2);
+  v_commission_amount := round(v_subtotal * 0.05, 2);
+  v_seller_payout_amount := round(greatest(v_subtotal - v_commission_amount, 0), 2);
 
   INSERT INTO public.orders (
     product_id, buyer_id, farmer_id, quantity, unit, total_price,
-    delivery_fee, status, payment_method, notes
+    delivery_fee, status, payment_method, notes,
+    escrow_amount, agrilink_commission_rate, agrilink_commission_amount,
+    seller_payout_amount, payout_status
   )
   VALUES (
     v_product.id, v_buyer_id, v_product.farmer_id, p_quantity, v_unit,
-    v_product.price_per_unit * p_quantity, p_delivery_fee, 'pending', 'mpesa',
-    NULLIF(trim(COALESCE(p_notes, '')), '')
+    v_subtotal, p_delivery_fee, 'pending', 'mpesa',
+    NULLIF(trim(COALESCE(p_notes, '')), ''),
+    v_escrow_amount, 0.05, v_commission_amount, v_seller_payout_amount, 'pending_payment'
   )
   RETURNING * INTO v_order;
 
@@ -508,6 +530,7 @@ CREATE TABLE IF NOT EXISTS public.micro_loan_applications (
   requires_branch_visit boolean NOT NULL DEFAULT false,
   branch_name text,
   branch_location text,
+  target_county text,
   branch_instructions text,
   branch_visit_status text NOT NULL DEFAULT 'not_required'
     CHECK (branch_visit_status IN ('not_required', 'pending_customer_visit', 'documents_received', 'valuation_pending', 'verified', 'waived')),
@@ -531,6 +554,16 @@ WHERE branch_visit_status NOT IN ('not_required', 'pending_customer_visit', 'doc
 UPDATE public.micro_loan_applications
 SET disbursed_at = COALESCE(disbursed_at, reviewed_at, created_at)
 WHERE status IN ('approved', 'disbursed', 'repaid');
+
+ALTER TABLE public.micro_loan_applications
+ADD COLUMN IF NOT EXISTS disbursement_method text NOT NULL DEFAULT 'mpesa'
+  CHECK (disbursement_method IN ('mpesa', 'voucher')),
+ADD COLUMN IF NOT EXISTS repayment_method text NOT NULL DEFAULT 'mpesa'
+  CHECK (repayment_method IN ('mpesa', 'pay_with_produce')),
+ADD COLUMN IF NOT EXISTS voucher_code text;
+
+ALTER TABLE public.micro_loan_applications
+ADD COLUMN IF NOT EXISTS target_county text;
 
 CREATE INDEX IF NOT EXISTS micro_loan_applications_user_created_idx
 ON public.micro_loan_applications (user_id, created_at DESC);
@@ -568,6 +601,7 @@ CREATE TABLE IF NOT EXISTS public.micro_loan_offers (
   requires_branch_visit boolean NOT NULL DEFAULT false,
   branch_name text,
   branch_location text,
+  target_county text,
   branch_instructions text,
   collateral_types jsonb NOT NULL DEFAULT '[]'::jsonb,
   required_documents jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -577,6 +611,17 @@ CREATE TABLE IF NOT EXISTS public.micro_loan_offers (
 
 CREATE INDEX IF NOT EXISTS micro_loan_offers_role_active_created_idx
 ON public.micro_loan_offers (applicant_role, is_active, created_at DESC);
+
+UPDATE public.micro_loan_offers
+SET target_county = COALESCE(target_county, NULLIF(TRIM(branch_location), ''))
+WHERE target_county IS NULL;
+
+UPDATE public.micro_loan_applications
+SET target_county = COALESCE(target_county, NULLIF(TRIM(branch_location), ''))
+WHERE target_county IS NULL;
+
+CREATE INDEX IF NOT EXISTS micro_loan_offers_role_county_active_created_idx
+ON public.micro_loan_offers (applicant_role, target_county, is_active, created_at DESC);
 
 ALTER TABLE public.micro_loan_applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.micro_loan_repayments ENABLE ROW LEVEL SECURITY;

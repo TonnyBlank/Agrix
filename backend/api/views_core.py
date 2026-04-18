@@ -40,6 +40,25 @@ from .http import HttpRequest, HttpResponse, JsonResponse
 logger = logging.getLogger(__name__)
 
 
+def _normalize_optional_profile_phone(value: Any, field_label: str = "Phone number") -> str | None:
+    if value in (None, ""):
+        return None
+    return f"+{normalize_kenyan_phone(str(value))}"
+
+
+def _normalize_optional_account_number(value: Any, field_label: str = "Bank account number") -> str | None:
+    if value in (None, ""):
+        return None
+    raw = str(value).strip()
+    if any(char.isalpha() for char in raw):
+        raise ApiException(f"{field_label} must contain digits only.", 400)
+    digits = "".join(char for char in raw if char.isdigit())
+    if not digits:
+        raise ApiException(f"{field_label} must contain digits only.", 400)
+    return digits
+AGRILINK_COMMISSION_RATE = 0.05
+
+
 def attach_order_meta(client, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not orders:
         return []
@@ -127,13 +146,134 @@ def get_allowed_statuses(current_status: str, is_farmer: bool) -> list[str]:
         return []
     if current_status == "pending":
         return ["cancelled"]
-    if current_status == "shipped":
-        return ["delivered"]
     return []
+
+
+def compute_order_financials(order: dict[str, Any]) -> dict[str, float]:
+    subtotal = float(order.get("total_price") or 0)
+    delivery_fee = float(order.get("delivery_fee") or 0)
+    escrow_amount = round(subtotal + delivery_fee, 2)
+    commission_amount = round(subtotal * AGRILINK_COMMISSION_RATE, 2)
+    seller_payout_amount = round(max(subtotal - commission_amount, 0), 2)
+    return {
+        "escrow_amount": escrow_amount,
+        "agrilink_commission_amount": commission_amount,
+        "seller_payout_amount": seller_payout_amount,
+    }
+
+
+def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
+    farmer_id = order.get("farmer_id")
+    order_id = str(order.get("id") or "")
+    seller_payout_amount = float(
+        order.get("seller_payout_amount")
+        if order.get("seller_payout_amount") is not None
+        else compute_order_financials(order)["seller_payout_amount"]
+    )
+
+    if not farmer_id or not order_id or seller_payout_amount <= 0:
+        return
+
+    loans, _ = client.select(
+        "micro_loan_applications",
+        filters={"user_id": f"eq.{farmer_id}", "repayment_method": "eq.pay_with_produce", "status": 'in.("approved","disbursed")'},
+    )
+    if not loans:
+        return
+
+    for loan in loans:
+        if seller_payout_amount <= 0:
+            break
+
+        repayments, _ = client.select(
+            "micro_loan_repayments",
+            select="id, amount, created_at, payment_method, payment_ref, phone_number, note",
+            filters={"loan_application_id": f"eq.{loan['id']}"},
+            order="created_at.asc",
+        )
+
+        schedule = build_loan_schedule(
+            loan.get("approved_amount"),
+            loan.get("requested_amount"),
+            loan.get("interest_rate"),
+            loan.get("repayment_days"),
+            loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+            repayments or [],
+        )
+
+        remaining_balance = float(schedule["summary"]["remainingBalance"])
+        if remaining_balance <= 0:
+            continue
+
+        deduction = min(seller_payout_amount, remaining_balance)
+        seller_payout_amount = round(seller_payout_amount - deduction, 2)
+
+        repayment = client.insert(
+            "micro_loan_repayments",
+            {
+                "loan_application_id": loan["id"],
+                "user_id": farmer_id,
+                "amount": deduction,
+                "payment_method": "pay_with_produce",
+                "payment_ref": f"ESCROW-{order_id[:8]}",
+                "phone_number": None,
+                "note": f"Automatic Pay-with-Produce deduction from released payout for order {order_id[:8]}.",
+            },
+            single=True,
+        )
+
+        next_schedule = build_loan_schedule(
+            loan.get("approved_amount"),
+            loan.get("requested_amount"),
+            loan.get("interest_rate"),
+            loan.get("repayment_days"),
+            loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+            [*(repayments or []), repayment],
+        )
+
+        next_status = "repaid" if next_schedule["summary"]["remainingBalance"] <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
+
+        client.update(
+            "micro_loan_applications",
+            {
+                "status": next_status,
+                "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+                "repaid_at": now_iso() if next_status == "repaid" else None,
+                "updated_at": now_iso(),
+            },
+            filters={"id": f"eq.{loan['id']}"},
+            single=True,
+        )
+
+
+def release_order_payout(client, order: dict[str, Any], verified_by_user_id: str, official_note: str | None = None):
+    if order.get("payment_status") != "paid":
+        raise ApiException("Buyer funds must reach the AgriLink escrow account before payout can be released.", 400)
+    if order.get("status") != "delivered":
+        raise ApiException("Only delivered orders can be officially signed off for seller payout.", 400)
+    if order.get("payout_status") == "released":
+        return order
+
+    updated = client.update(
+        "orders",
+        {
+            "payout_status": "released",
+            "official_verified_at": order.get("official_verified_at") or now_iso(),
+            "official_verified_by": order.get("official_verified_by") or verified_by_user_id,
+            "official_note": official_note if official_note is not None else order.get("official_note"),
+            "payout_released_at": order.get("payout_released_at") or now_iso(),
+        },
+        filters={"id": f"eq.{order['id']}"},
+        single=True,
+    )
+    apply_pay_with_produce_deductions(client, updated)
+    return updated
 
 
 def mark_order_paid(order_id: str, checkout_request_id: str, receipt_number: str | None = None):
     admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    financials = compute_order_financials(order or {})
     admin.update(
         "orders",
         {
@@ -141,6 +281,12 @@ def mark_order_paid(order_id: str, checkout_request_id: str, receipt_number: str
             "payment_ref": receipt_number or checkout_request_id,
             "paid_at": now_iso(),
             "payment_error": None,
+            "escrow_amount": financials["escrow_amount"],
+            "agrilink_commission_rate": AGRILINK_COMMISSION_RATE,
+            "agrilink_commission_amount": financials["agrilink_commission_amount"],
+            "seller_payout_amount": financials["seller_payout_amount"],
+            "escrow_received_at": now_iso(),
+            "payout_status": "awaiting_delivery",
         },
         filters={"id": f"eq.{order_id}"},
     )
@@ -762,80 +908,12 @@ def order_status(request: HttpRequest, order_id: str):
     allowed = get_allowed_statuses(existing["status"], existing["farmer_id"] == request.user_id)
     if status not in allowed:
         raise ApiException(f"You cannot change an order from {existing['status']} to {status}.", 400)
-    updated = request.supabase.update("orders", {"status": status}, filters={"id": f"eq.{order_id}"}, single=True)
-    
-    if status == "delivered":
-        # Handle Pay-with-Produce escrow
-        loans, _ = request.supabase.select(
-            "micro_loan_applications",
-            filters={"user_id": f"eq.{existing['farmer_id']}", "repayment_method": "eq.pay_with_produce", "status": "in.(\"approved\",\"disbursed\")"},
-        )
-        if loans:
-            farmer_payout_amount = float(updated.get("total_price") or 0) - float(updated.get("delivery_fee") or 0)
-            
-            for loan in loans:
-                if farmer_payout_amount <= 0:
-                    break
-                    
-                repayments, _ = request.supabase.select(
-                    "micro_loan_repayments",
-                    select="id, amount, created_at, payment_method, payment_ref, phone_number, note",
-                    filters={"loan_application_id": f"eq.{loan['id']}"},
-                    order="created_at.asc",
-                )
-                
-                schedule = build_loan_schedule(
-                    loan.get("approved_amount"),
-                    loan.get("requested_amount"),
-                    loan.get("interest_rate"),
-                    loan.get("repayment_days"),
-                    loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-                    repayments or [],
-                )
-                
-                remaining_balance = float(schedule["summary"]["remainingBalance"])
-                if remaining_balance > 0:
-                    deduction = min(farmer_payout_amount, remaining_balance)
-                    farmer_payout_amount -= deduction
-                    
-                    repayment = request.supabase.insert(
-                        "micro_loan_repayments",
-                        {
-                            "loan_application_id": loan["id"],
-                            "user_id": existing["farmer_id"],
-                            "amount": deduction,
-                            "payment_method": "pay_with_produce",
-                            "payment_ref": f"ESCROW-{order_id[:8]}",
-                            "phone_number": None,
-                            "note": f"Automatic Pay-with-Produce deduction from order {order_id[:8]}.",
-                        },
-                        single=True,
-                    )
-                    
-                    # Compute next schedule
-                    next_schedule = build_loan_schedule(
-                        loan.get("approved_amount"),
-                        loan.get("requested_amount"),
-                        loan.get("interest_rate"),
-                        loan.get("repayment_days"),
-                        loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-                        [*(repayments or []), repayment],
-                    )
-                    
-                    next_status = "repaid" if next_schedule["summary"]["remainingBalance"] <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
-                    
-                    request.supabase.update(
-                        "micro_loan_applications",
-                        {
-                            "status": next_status,
-                            "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-                            "repaid_at": now_iso() if next_status == "repaid" else None,
-                            "updated_at": now_iso(),
-                        },
-                        filters={"id": f"eq.{loan['id']}"},
-                        single=True,
-                    )
-
+    updates: dict[str, Any] = {"status": status}
+    if status == "delivered" and existing.get("payment_status") == "paid":
+        updates["payout_status"] = "awaiting_official_signoff"
+    elif status == "cancelled":
+        updates["payout_status"] = "cancelled"
+    updated = request.supabase.update("orders", updates, filters={"id": f"eq.{order_id}"}, single=True)
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
 
 
@@ -862,7 +940,6 @@ def profile_me(request: HttpRequest):
         "farm_size",
         "main_crops",
         "bio",
-        "phone",
         "farm_type",
         "irrigation_type",
         "soil_type",
@@ -872,6 +949,9 @@ def profile_me(request: HttpRequest):
     ]:
         if field in body:
             update_payload[field] = body.get(field)
+
+    if "phone" in body:
+        update_payload["phone"] = _normalize_optional_profile_phone(body.get("phone"))
 
     if "years_farming" in body:
         years_farming = body.get("years_farming")
@@ -906,10 +986,18 @@ def profile_me(request: HttpRequest):
     if "payout_method" in body:
         payout_method = body.get("payout_method") if body.get("payout_method") in {"mpesa", "bank"} else None
         update_payload["payout_method"] = payout_method
-        update_payload["payout_mpesa_number"] = body.get("payout_mpesa_number") if payout_method == "mpesa" else None
+        update_payload["payout_mpesa_number"] = (
+            _normalize_optional_profile_phone(body.get("payout_mpesa_number"), "M-Pesa number")
+            if payout_method == "mpesa"
+            else None
+        )
         update_payload["bank_name"] = body.get("bank_name") if payout_method == "bank" else None
         update_payload["bank_account_name"] = body.get("bank_account_name") if payout_method == "bank" else None
-        update_payload["bank_account_number"] = body.get("bank_account_number") if payout_method == "bank" else None
+        update_payload["bank_account_number"] = (
+            _normalize_optional_account_number(body.get("bank_account_number"))
+            if payout_method == "bank"
+            else None
+        )
         update_payload["payout_details_updated_at"] = now_iso() if payout_method else None
 
     if existing_profile.get("guarantors") is None:
@@ -981,7 +1069,7 @@ def profiles_farmers(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
     query = (request.GET.get("q") or "").strip().lower()
-    rows, _ = request.supabase.select(
+    rows, _ = admin_client().select(
         "profiles",
         select="user_id, full_name, county, farm_size, main_crops, farm_type, irrigation_type, soil_type, years_farming, has_storage, has_transport, cooperative_name, farm_gps_lat, farm_gps_lng, bio, photo_url",
         filters={"user_id": f"neq.{request.user_id}"},
@@ -1012,7 +1100,7 @@ def profiles_farmers(request: HttpRequest):
 def profile_public(request: HttpRequest, user_id: str):
     if request.method != "GET":
         return method_not_allowed(["GET"])
-    client = user_client()
+    client = admin_client()
     profile, _ = client.select(
         "profiles",
         select="full_name, county, farm_size, main_crops, farm_type, irrigation_type, soil_type, years_farming, has_storage, has_transport, cooperative_name, farm_gps_lat, farm_gps_lng, bio, photo_url",

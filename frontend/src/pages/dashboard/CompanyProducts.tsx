@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, apiFetch } from "@/lib/api";
+import { sanitizeDecimalInput } from "@/lib/inputSanitizers";
 
 const productCategoryOptions = [
   "produce",
@@ -86,16 +87,40 @@ export default function CompanyProducts() {
   };
 
   const submit = async () => {
+    const pricePerUnit = Number(form.price_per_unit);
+    const minimumOrderQuantity = Number(form.minimum_order_quantity);
+    const stock = Number(form.stock);
+
+    if (!form.name.trim()) {
+      toast.error("Product name is required.");
+      return;
+    }
+
+    if (!form.price_per_unit.trim() || !Number.isFinite(pricePerUnit) || pricePerUnit < 0) {
+      toast.error("Enter a valid price per unit.");
+      return;
+    }
+
+    if (!form.minimum_order_quantity.trim() || !Number.isFinite(minimumOrderQuantity) || minimumOrderQuantity <= 0) {
+      toast.error("Enter a valid minimum order quantity.");
+      return;
+    }
+
+    if (!form.stock.trim() || !Number.isFinite(stock) || stock < 0) {
+      toast.error("Enter a valid stock amount.");
+      return;
+    }
+
     setSaving(true);
     try {
       const body = {
         name: form.name.trim(),
         category: form.category.trim() || "other",
         description: form.description.trim() || null,
-        price_per_unit: Number(form.price_per_unit) || 0,
+        price_per_unit: pricePerUnit,
         unit: form.unit.trim() || "kg",
-        minimum_order_quantity: Number(form.minimum_order_quantity) || 1,
-        stock: Number(form.stock) || 0,
+        minimum_order_quantity: minimumOrderQuantity,
+        stock,
         image_url: form.image_url.trim() || null,
         is_available: form.is_available,
       };
@@ -224,15 +249,48 @@ export default function CompanyProducts() {
             <div className="grid gap-3 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="price_per_unit">Price per unit</Label>
-                <Input id="price_per_unit" type="number" min="0" step="0.01" value={form.price_per_unit} onChange={(event) => setForm((current) => ({ ...current, price_per_unit: event.target.value }))} />
+                <Input
+                  id="price_per_unit"
+                  type="text"
+                  inputMode="decimal"
+                  value={form.price_per_unit}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      price_per_unit: sanitizeDecimalInput(event.target.value, { maxDecimals: 2 }),
+                    }))
+                  }
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="minimum_order_quantity">Min order</Label>
-                <Input id="minimum_order_quantity" type="number" min="1" step="0.01" value={form.minimum_order_quantity} onChange={(event) => setForm((current) => ({ ...current, minimum_order_quantity: event.target.value }))} />
+                <Input
+                  id="minimum_order_quantity"
+                  type="text"
+                  inputMode="decimal"
+                  value={form.minimum_order_quantity}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      minimum_order_quantity: sanitizeDecimalInput(event.target.value, { maxDecimals: 2 }),
+                    }))
+                  }
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="stock">Stock</Label>
-                <Input id="stock" type="number" min="0" step="0.01" value={form.stock} onChange={(event) => setForm((current) => ({ ...current, stock: event.target.value }))} />
+                <Input
+                  id="stock"
+                  type="text"
+                  inputMode="decimal"
+                  value={form.stock}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      stock: sanitizeDecimalInput(event.target.value, { maxDecimals: 2 }),
+                    }))
+                  }
+                />
               </div>
             </div>
             <div className="space-y-2">

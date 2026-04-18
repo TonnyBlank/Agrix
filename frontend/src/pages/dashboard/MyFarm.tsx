@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/hooks/useAuth";
 import { useMyProducts } from "@/hooks/useProducts";
 import { apiFetch } from "@/lib/api";
+import { sanitizeCoordinateInput, sanitizeDigits } from "@/lib/inputSanitizers";
 import { countyOptions, findCountyForSubCounty, findCountyOption, subCountyOptions } from "@/lib/kenyaLocations";
 import { toast } from "sonner";
 
@@ -859,7 +860,14 @@ export default function MyFarm() {
                   <Input
                     id="farm_gps_lat"
                     value={formData.farm_gps_lat}
-                    onChange={(event) => setFormData((current) => ({ ...current, farm_gps_lat: event.target.value }))}
+                    onChange={(event) =>
+                      setFormData((current) => ({
+                        ...current,
+                        farm_gps_lat: sanitizeCoordinateInput(event.target.value),
+                      }))
+                    }
+                    type="text"
+                    inputMode="decimal"
                     placeholder="-0.123456"
                     className="rounded-xl"
                   />
@@ -869,7 +877,14 @@ export default function MyFarm() {
                   <Input
                     id="farm_gps_lng"
                     value={formData.farm_gps_lng}
-                    onChange={(event) => setFormData((current) => ({ ...current, farm_gps_lng: event.target.value }))}
+                    onChange={(event) =>
+                      setFormData((current) => ({
+                        ...current,
+                        farm_gps_lng: sanitizeCoordinateInput(event.target.value),
+                      }))
+                    }
+                    type="text"
+                    inputMode="decimal"
                     placeholder="36.123456"
                     className="rounded-xl"
                   />
@@ -953,11 +968,10 @@ export default function MyFarm() {
                 <Label htmlFor="years_farming">Years Farming</Label>
                 <Input
                   id="years_farming"
-                  type="number"
-                  min="0"
-                  step="1"
+                  type="text"
+                  inputMode="numeric"
                   value={formData.years_farming}
-                  onChange={(e) => setFormData({ ...formData, years_farming: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, years_farming: sanitizeDigits(e.target.value, { maxLength: 2 }) })}
                   placeholder="0"
                   className="rounded-xl"
                 />

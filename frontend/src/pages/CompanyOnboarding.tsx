@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import Navbar from "@/components/landing/Navbar";
 import Footer from "@/components/landing/Footer";
 import { apiFetch, ApiError } from "@/lib/api";
+import { isValidKenyanPhone, normalizeKenyanPhone, sanitizePhoneInput } from "@/lib/inputSanitizers";
 
 const TESTIMONIALS = [
   {
@@ -89,7 +90,10 @@ export default function CompanyOnboarding() {
         }));
       }
     } else {
-      setFormData((prev) => ({ ...prev, [name]: value }));
+      setFormData((prev) => ({
+        ...prev,
+        [name]: name === "phone" ? sanitizePhoneInput(value) : value,
+      }));
     }
   };
 
@@ -103,6 +107,11 @@ export default function CompanyOnboarding() {
       if (formData.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
         throw new Error("Enter a valid company email address or leave it blank for now.");
       }
+      if (formData.phone.trim() && !isValidKenyanPhone(formData.phone)) {
+        throw new Error("Enter a valid Kenyan phone number like 0712345678 or +254712345678.");
+      }
+
+      const normalizedPhone = formData.phone.trim() ? normalizeKenyanPhone(formData.phone) : "";
 
       const subject = encodeURIComponent(`Enterprise Verification Request - ${formData.company_name.trim()}`);
       const body = encodeURIComponent(
@@ -110,7 +119,7 @@ export default function CompanyOnboarding() {
         `Company Name: ${formData.company_name.trim()}\n` +
         `Company Type: ${formData.company_type}\n` +
         `Location: ${formData.headquarters_location.trim() || 'N/A'}\n` +
-        `Phone: ${formData.phone.trim() || 'N/A'}\n` +
+        `Phone: ${normalizedPhone || 'N/A'}\n` +
         `Business Email: ${formData.email.trim()}\n` +
         `Tax ID: ${formData.tax_id.trim() || 'N/A'}\n` +
         `Registration No: ${formData.registration_number.trim() || 'N/A'}\n` +
@@ -367,6 +376,7 @@ export default function CompanyOnboarding() {
                                   name="phone"
                                   value={formData.phone}
                                   onChange={handleChange}
+                                  inputMode="tel"
                                   placeholder="+254 7XX XXX XXX"
                                   className={`${inputClasses} pl-12`}
                                 />

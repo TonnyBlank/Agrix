@@ -113,6 +113,16 @@ export type Database = {
           checkout_request_id: string | null
           payment_error: string | null
           paid_at: string | null
+          escrow_amount: number
+          agrilink_commission_rate: number
+          agrilink_commission_amount: number
+          seller_payout_amount: number
+          payout_status: string
+          escrow_received_at: string | null
+          official_verified_at: string | null
+          official_verified_by: string | null
+          official_note: string | null
+          payout_released_at: string | null
           notes: string | null
           created_at: string
           updated_at: string
@@ -134,6 +144,16 @@ export type Database = {
           checkout_request_id?: string | null
           payment_error?: string | null
           paid_at?: string | null
+          escrow_amount?: number
+          agrilink_commission_rate?: number
+          agrilink_commission_amount?: number
+          seller_payout_amount?: number
+          payout_status?: string
+          escrow_received_at?: string | null
+          official_verified_at?: string | null
+          official_verified_by?: string | null
+          official_note?: string | null
+          payout_released_at?: string | null
           notes?: string | null
           created_at?: string
           updated_at?: string
@@ -155,6 +175,16 @@ export type Database = {
           checkout_request_id?: string | null
           payment_error?: string | null
           paid_at?: string | null
+          escrow_amount?: number
+          agrilink_commission_rate?: number
+          agrilink_commission_amount?: number
+          seller_payout_amount?: number
+          payout_status?: string
+          escrow_received_at?: string | null
+          official_verified_at?: string | null
+          official_verified_by?: string | null
+          official_note?: string | null
+          payout_released_at?: string | null
           notes?: string | null
           created_at?: string
           updated_at?: string
@@ -240,6 +270,7 @@ export type Database = {
           requires_branch_visit: boolean
           branch_name: string | null
           branch_location: string | null
+          target_county: string | null
           branch_instructions: string | null
           branch_visit_status: string
           collateral_types: Json
@@ -272,6 +303,7 @@ export type Database = {
           requires_branch_visit?: boolean
           branch_name?: string | null
           branch_location?: string | null
+          target_county?: string | null
           branch_instructions?: string | null
           branch_visit_status?: string
           collateral_types?: Json
@@ -304,6 +336,7 @@ export type Database = {
           requires_branch_visit?: boolean
           branch_name?: string | null
           branch_location?: string | null
+          target_county?: string | null
           branch_instructions?: string | null
           branch_visit_status?: string
           collateral_types?: Json
@@ -335,6 +368,7 @@ export type Database = {
           requires_branch_visit: boolean
           branch_name: string | null
           branch_location: string | null
+          target_county: string | null
           branch_instructions: string | null
           collateral_types: Json
           required_documents: Json
@@ -356,6 +390,7 @@ export type Database = {
           requires_branch_visit?: boolean
           branch_name?: string | null
           branch_location?: string | null
+          target_county?: string | null
           branch_instructions?: string | null
           collateral_types?: Json
           required_documents?: Json
@@ -377,6 +412,7 @@ export type Database = {
           requires_branch_visit?: boolean
           branch_name?: string | null
           branch_location?: string | null
+          target_county?: string | null
           branch_instructions?: string | null
           collateral_types?: Json
           required_documents?: Json

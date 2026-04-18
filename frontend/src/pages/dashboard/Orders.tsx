@@ -18,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOrders, type Order } from "@/hooks/useOrders";
 import { useAuth } from "@/hooks/useAuth";
 import DashboardShell from "@/components/dashboard/DashboardShell";
+import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -200,6 +201,7 @@ function buildReceiptHtml(order: Order) {
           <div class="section-copy">
             Buyer marketplace account<br />
             Payment method: ${paymentMethod}<br />
+            Funds first move into AgriLink escrow<br />
             Order ID: ${order.id}
           </div>
         </div>
@@ -207,8 +209,8 @@ function buildReceiptHtml(order: Order) {
           <div class="section-kicker">Paid To</div>
           <div class="section-title">${order.farmer_profile?.full_name || "Farmer"}</div>
           <div class="section-copy">
-            Seller marketplace account<br />
-            Settlement channel: ${receiptCompany.name}<br />
+            Seller payout after official AgriLink sign-off<br />
+            Settlement channel: ${receiptCompany.name} less 5% commission<br />
             Created: ${new Date(order.created_at).toLocaleDateString()}
           </div>
         </div>
@@ -244,8 +246,8 @@ function buildReceiptHtml(order: Order) {
         <div class="note-box">
           <div class="section-kicker">Receipt Note</div>
           <div class="section-copy">
-            This invoice confirms payment processed through ${receiptCompany.name} for the marketplace order above.
-            Keep this file for supplier reconciliation, buyer support, and internal records.
+            This invoice confirms buyer payment has been received into ${receiptCompany.name} escrow for the marketplace order above.
+            Seller payout is released after delivery and official sign-off, with a 5% AgriLink commission retained.
           </div>
         </div>
         <div class="total-box">
@@ -334,6 +336,8 @@ function ReceiptDialog({ order, onOpenChange }: { order: Order | null; onOpenCha
                       <br />
                       Payment method: {order.payment_method || "M-Pesa"}
                       <br />
+                      Funds first move into AgriLink escrow
+                      <br />
                       Order ID: {order.id}
                     </p>
                   </div>
@@ -341,9 +345,9 @@ function ReceiptDialog({ order, onOpenChange }: { order: Order | null; onOpenCha
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Paid To</p>
                     <p className="mt-2 text-sm font-semibold text-foreground">{order.farmer_profile?.full_name || "Farmer"}</p>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                      Seller marketplace account
+                      Seller payout after official AgriLink sign-off
                       <br />
-                      Settlement channel: {receiptCompany.name}
+                      Settlement channel: {receiptCompany.name} less 5% commission
                       <br />
                       Created: {new Date(order.created_at).toLocaleDateString()}
                     </p>
@@ -378,8 +382,8 @@ function ReceiptDialog({ order, onOpenChange }: { order: Order | null; onOpenCha
                   <div className="rounded-[1rem] border border-border bg-muted/20 p-3.5">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Receipt Note</p>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                      This invoice confirms payment processed through {receiptCompany.name} for the marketplace order above.
-                      Keep it for supplier reconciliation, buyer support, and internal records.
+                      This invoice confirms buyer payment has reached {receiptCompany.name} escrow for the marketplace order above.
+                      Seller payout is released after delivery and official sign-off, with a 5% AgriLink commission retained.
                     </p>
                   </div>
                   <div className="rounded-[1rem] border border-emerald-200 bg-emerald-50/80 p-3.5 dark:border-emerald-500/30 dark:bg-emerald-500/10">
@@ -424,7 +428,6 @@ function OrderActions({ order, view, busy, onChangeStatus }: { order: Order; vie
   }
   if (view === "buying") {
     if (order.status === "pending") return <Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />} Cancel</Button>;
-    if (order.status === "shipped") return <Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("delivered")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />} Mark Received</Button>;
   }
   return null;
 }
@@ -478,14 +481,12 @@ function OrdersDesktopTable(props: {
   startIndex?: number;
   view: "selling" | "buying";
   busyOrderId: string | null;
-  paymentPhoneByOrder: Record<string, string>;
-  onPhoneChange: (orderId: string, value: string) => void;
   onChangeStatus: (orderId: string, status: string) => void;
-  onStartPayment: (orderId: string) => void;
+  onOpenPayment: (order: Order) => void;
   onRefreshPayment: (orderId: string) => void;
   onViewReceipt: (order: Order) => void;
 }) {
-  const { orders, startIndex = 0, view, busyOrderId, paymentPhoneByOrder, onPhoneChange, onChangeStatus, onStartPayment, onRefreshPayment, onViewReceipt } = props;
+  const { orders, startIndex = 0, view, busyOrderId, onChangeStatus, onOpenPayment, onRefreshPayment, onViewReceipt } = props;
 
   return (
     <div className="overflow-x-auto rounded-[1rem] border border-border/70 bg-white/90 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
@@ -563,8 +564,7 @@ function OrdersDesktopTable(props: {
                   </div>
                   {view === "buying" && order.payment_status !== "paid" && order.status !== "cancelled" && (
                     <div className="mt-2 flex flex-wrap justify-end gap-2">
-                      <Input value={paymentPhoneByOrder[order.id] ?? ""} onChange={(event) => onPhoneChange(order.id, event.target.value)} placeholder="M-Pesa number" className="h-8 w-[180px] rounded-xl" />
-                      <Button size="sm" className="h-8 rounded-xl px-3 text-xs" disabled={busy} onClick={() => onStartPayment(order.id)}>
+                      <Button size="sm" className="h-8 rounded-xl px-3 text-xs" disabled={busy} onClick={() => onOpenPayment(order)}>
                         {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <CreditCard className="mr-1 h-3 w-3" />}
                         Pay with M-Pesa
                       </Button>
@@ -692,10 +692,8 @@ function OrderCard(props: {
   order: Order;
   view: "selling" | "buying";
   busy: boolean;
-  phoneNumber: string;
-  onPhoneChange: (value: string) => void;
   onChangeStatus: (status: string) => void;
-  onStartPayment: () => void;
+  onOpenPayment: () => void;
   onRefreshPayment: () => void;
   onViewReceipt: (order: Order) => void;
 }) {
@@ -703,10 +701,8 @@ function OrderCard(props: {
     order,
     view,
     busy,
-    phoneNumber,
-    onPhoneChange,
     onChangeStatus,
-    onStartPayment,
+    onOpenPayment,
     onRefreshPayment,
     onViewReceipt,
   } = props;
@@ -826,13 +822,7 @@ function OrderCard(props: {
 
       {view === "buying" && order.payment_status !== "paid" && order.status !== "cancelled" && (
         <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border/70 pt-2.5 sm:flex sm:flex-row sm:flex-wrap">
-          <Input
-            value={phoneNumber}
-            onChange={(event) => onPhoneChange(event.target.value)}
-            placeholder="M-Pesa number"
-            className="col-span-2 h-10 rounded-xl sm:max-w-[180px]"
-          />
-          <Button size="sm" className="h-9 rounded-xl px-3" disabled={busy} onClick={onStartPayment}>
+          <Button size="sm" className="h-9 rounded-xl px-3" disabled={busy} onClick={onOpenPayment}>
             {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <CreditCard className="mr-1 h-3 w-3" />}
             Pay with M-Pesa
           </Button>
@@ -852,6 +842,7 @@ export default function Orders() {
   const { profile } = useAuth();
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [paymentPhoneByOrder, setPaymentPhoneByOrder] = useState<Record<string, string>>({});
+  const [paymentDialogOrder, setPaymentDialogOrder] = useState<Order | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [activeExportRange, setActiveExportRange] = useState<number>(30);
   const [transactionSearch, setTransactionSearch] = useState("");
@@ -964,6 +955,7 @@ export default function Orders() {
   const handleStartPayment = async (orderId: string) => {
     setBusyOrderId(orderId);
     await initiateMpesaPayment(orderId, paymentPhoneByOrder[orderId] || "");
+    setPaymentDialogOrder(null);
     setBusyOrderId(null);
   };
 
@@ -1222,10 +1214,8 @@ export default function Orders() {
                     startIndex={(sellingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="selling"
                     busyOrderId={busyOrderId}
-                    paymentPhoneByOrder={paymentPhoneByOrder}
-                    onPhoneChange={(orderId, value) => setPaymentPhoneByOrder((current) => ({ ...current, [orderId]: value }))}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
-                    onStartPayment={(orderId) => void handleStartPayment(orderId)}
+                    onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
                   />
@@ -1254,10 +1244,8 @@ export default function Orders() {
                     startIndex={(buyingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="buying"
                     busyOrderId={busyOrderId}
-                    paymentPhoneByOrder={paymentPhoneByOrder}
-                    onPhoneChange={(orderId, value) => setPaymentPhoneByOrder((current) => ({ ...current, [orderId]: value }))}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
-                    onStartPayment={(orderId) => void handleStartPayment(orderId)}
+                    onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
                   />
@@ -1292,6 +1280,28 @@ export default function Orders() {
           </TabsContent>
         </Tabs>
       </div>
+
+      <MpesaPaymentDialog
+        open={Boolean(paymentDialogOrder)}
+        onOpenChange={(open) => !open && setPaymentDialogOrder(null)}
+        title="Pay order with M-Pesa"
+        description="Confirm the number that should receive the STK push for this order. You can come back to Orders and use Check M-Pesa if the confirmation takes a moment."
+        amountValue={
+          paymentDialogOrder
+            ? `KES ${(Number(paymentDialogOrder.total_price) + Number(paymentDialogOrder.delivery_fee || 0)).toLocaleString()}`
+            : null
+        }
+        referenceLabel="Order"
+        referenceValue={paymentDialogOrder ? `${paymentDialogOrder.product?.name || "Product"} • ${paymentDialogOrder.id.slice(0, 8)}` : null}
+        phoneNumber={paymentDialogOrder ? paymentPhoneByOrder[paymentDialogOrder.id] ?? "" : ""}
+        onPhoneChange={(value) => {
+          if (!paymentDialogOrder) return;
+          setPaymentPhoneByOrder((current) => ({ ...current, [paymentDialogOrder.id]: value }));
+        }}
+        onConfirm={() => paymentDialogOrder && void handleStartPayment(paymentDialogOrder.id)}
+        busy={Boolean(paymentDialogOrder && busyOrderId === paymentDialogOrder.id)}
+        errorMessage={paymentDialogOrder?.payment_error || null}
+      />
     </DashboardShell>
   );
 }

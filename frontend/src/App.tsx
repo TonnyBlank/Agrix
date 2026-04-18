@@ -49,6 +49,7 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 const nonAdminRoles = ["farmer_free", "farmer_pro", "company"] as const;
+const farmerRoles = ["farmer_free", "farmer_pro"] as const;
 
 function LegacyEnterpriseRedirect() {
   const { role } = useAuth();
@@ -81,7 +82,7 @@ const App = () => (
             <Route path="/company-register" element={<CompanyOnboarding />} />
             <Route path="/dashboard" element={<ProtectedRoute><DashboardRedirect /></ProtectedRoute>} />
             <Route path="/dashboard/admin" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute>} />
-            <Route path="/dashboard/company" element={<ProtectedRoute><CompanyDashboard /></ProtectedRoute>} />
+            <Route path="/dashboard/company" element={<ProtectedRoute allowedRoles={["company"]}><CompanyDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/company/products" element={<ProtectedRoute allowedRoles={["company"]}><CompanyProducts /></ProtectedRoute>} />
             <Route path="/dashboard/company/partners" element={<ProtectedRoute allowedRoles={["company"]}><CompanyPartners /></ProtectedRoute>} />
             <Route path="/dashboard/company/orders" element={<ProtectedRoute allowedRoles={["company"]}><CompanyOrders /></ProtectedRoute>} />
@@ -95,23 +96,23 @@ const App = () => (
             <Route path="/dashboard/admin/transactions" element={<ProtectedRoute allowedRoles={["admin"]}><AdminTransactions /></ProtectedRoute>} />
             <Route path="/dashboard/admin/users" element={<ProtectedRoute allowedRoles={["admin"]}><AdminUsers /></ProtectedRoute>} />
             <Route path="/dashboard/admin/companies" element={<ProtectedRoute allowedRoles={["admin"]}><AdminCompanyVerification /></ProtectedRoute>} />
-            <Route path="/dashboard/free" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><DashboardHome /></ProtectedRoute>} />
-            <Route path="/dashboard/pro" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><DashboardHome /></ProtectedRoute>} />
+            <Route path="/dashboard/free" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><DashboardHome /></ProtectedRoute>} />
+            <Route path="/dashboard/pro" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><DashboardHome /></ProtectedRoute>} />
             <Route path="/dashboard/enterprise" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><LegacyEnterpriseRedirect /></ProtectedRoute>} />
             <Route path="/dashboard/preview/farmer-free" element={<ProtectedRoute><FarmerFreeDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/preview/farmer-pro" element={<ProtectedRoute><FarmerProDashboard /></ProtectedRoute>} />
-            <Route path="/dashboard/analytics" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><PerformanceAnalytics /></ProtectedRoute>} />
-            <Route path="/dashboard/farm" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><MyFarm /></ProtectedRoute>} />
-            <Route path="/dashboard/products" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><MyProducts /></ProtectedRoute>} />
+            <Route path="/dashboard/analytics" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><PerformanceAnalytics /></ProtectedRoute>} />
+            <Route path="/dashboard/farm" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MyFarm /></ProtectedRoute>} />
+            <Route path="/dashboard/products" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MyProducts /></ProtectedRoute>} />
             <Route path="/dashboard/marketplace" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Marketplace /></ProtectedRoute>} />
-            <Route path="/dashboard/orders" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Orders /></ProtectedRoute>} />
-            <Route path="/dashboard/ai-scanner" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><AIScanner /></ProtectedRoute>} />
-            <Route path="/dashboard/calendar" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><CropCalendar /></ProtectedRoute>} />
-            <Route path="/dashboard/community" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Community /></ProtectedRoute>} />
+            <Route path="/dashboard/orders" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Orders /></ProtectedRoute>} />
+            <Route path="/dashboard/ai-scanner" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><AIScanner /></ProtectedRoute>} />
+            <Route path="/dashboard/calendar" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><CropCalendar /></ProtectedRoute>} />
+            <Route path="/dashboard/community" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Community /></ProtectedRoute>} />
             <Route path="/dashboard/messages" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Messages /></ProtectedRoute>} />
-            <Route path="/dashboard/micro-loans" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><MicroLoans /></ProtectedRoute>} />
-            <Route path="/dashboard/upgrade" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><UpgradePlan /></ProtectedRoute>} />
-            <Route path="/dashboard/profile" element={<ProtectedRoute><ProfileRoute /></ProtectedRoute>} />
+            <Route path="/dashboard/micro-loans" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MicroLoans /></ProtectedRoute>} />
+            <Route path="/dashboard/upgrade" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><UpgradePlan /></ProtectedRoute>} />
+            <Route path="/dashboard/profile" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><ProfileRoute /></ProtectedRoute>} />
             <Route path="/dashboard/farmers/:userId" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><FarmerProfile /></ProtectedRoute>} />
             <Route path="/micro-loans-isolated" element={<MicroLoans />} />
             <Route path="*" element={<NotFound />} />

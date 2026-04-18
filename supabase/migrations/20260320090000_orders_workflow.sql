@@ -15,6 +15,10 @@ declare
   v_product public.products%rowtype;
   v_order public.orders%rowtype;
   v_unit text;
+  v_subtotal numeric(10,2);
+  v_escrow_amount numeric(10,2);
+  v_commission_amount numeric(10,2);
+  v_seller_payout_amount numeric(10,2);
 begin
   if v_buyer_id is null then
     raise exception 'You must be signed in to place an order';
@@ -51,6 +55,10 @@ begin
   end if;
 
   v_unit := coalesce(nullif(trim(p_unit), ''), v_product.unit);
+  v_subtotal := round(v_product.price_per_unit * p_quantity, 2);
+  v_escrow_amount := round(v_subtotal + p_delivery_fee, 2);
+  v_commission_amount := round(v_subtotal * 0.05, 2);
+  v_seller_payout_amount := round(greatest(v_subtotal - v_commission_amount, 0), 2);
 
   insert into public.orders (
     product_id,
@@ -62,7 +70,12 @@ begin
     delivery_fee,
     status,
     payment_method,
-    notes
+    notes,
+    escrow_amount,
+    agrilink_commission_rate,
+    agrilink_commission_amount,
+    seller_payout_amount,
+    payout_status
   )
   values (
     v_product.id,
@@ -70,11 +83,16 @@ begin
     v_product.farmer_id,
     p_quantity,
     v_unit,
-    v_product.price_per_unit * p_quantity,
+    v_subtotal,
     p_delivery_fee,
     'pending',
     'mpesa',
-    nullif(trim(coalesce(p_notes, '')), '')
+    nullif(trim(coalesce(p_notes, '')), ''),
+    v_escrow_amount,
+    0.05,
+    v_commission_amount,
+    v_seller_payout_amount,
+    'pending_payment'
   )
   returning *
   into v_order;

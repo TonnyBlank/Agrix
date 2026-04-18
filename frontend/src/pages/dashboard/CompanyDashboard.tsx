@@ -3,6 +3,7 @@ import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { ApiError, apiFetch } from "@/lib/api";
+import { isValidKenyanPhone, normalizeKenyanPhone, sanitizePhoneInput } from "@/lib/inputSanitizers";
 import { countyOptions } from "@/lib/kenyaLocations";
 import {
   Package,
@@ -190,7 +191,10 @@ export default function CompanyDashboard() {
   }, [profile?.county, profile?.phone, user?.email]);
 
   const updateSetupField = (field: keyof typeof companySetupForm, value: string) => {
-    setCompanySetupForm((current) => ({ ...current, [field]: value }));
+    setCompanySetupForm((current) => ({
+      ...current,
+      [field]: field === "phone" ? sanitizePhoneInput(value) : value,
+    }));
   };
 
   const handleCreateCompanyProfile = async () => {
@@ -207,6 +211,11 @@ export default function CompanyDashboard() {
       return;
     }
 
+    if (companySetupForm.phone.trim() && !isValidKenyanPhone(companySetupForm.phone)) {
+      setLoadError("Enter a valid Kenyan phone number like 0712345678 or +254712345678.");
+      return;
+    }
+
     setCreatingCompanyProfile(true);
     setLoadError(null);
     try {
@@ -218,7 +227,7 @@ export default function CompanyDashboard() {
           company_type: companySetupForm.company_type.trim() || "other",
           registration_number: companySetupForm.registration_number.trim(),
           tax_id: companySetupForm.tax_id.trim(),
-          phone: companySetupForm.phone.trim() || null,
+          phone: companySetupForm.phone.trim() ? normalizeKenyanPhone(companySetupForm.phone) : null,
           email: companySetupForm.email.trim() || null,
           headquarters_location: companySetupForm.headquarters_location.trim() || null,
           bio: companySetupForm.bio.trim() || null,
@@ -345,6 +354,7 @@ export default function CompanyDashboard() {
                         type="tel"
                         value={companySetupForm.phone}
                         onChange={(event) => updateSetupField("phone", event.target.value)}
+                        inputMode="tel"
                         placeholder="Phone number"
                         className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
                       />

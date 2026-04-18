@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { apiFetch, ApiError } from "@/lib/api";
 
+const COMPANY_REDIRECT_LOOKUP_TIMEOUT_MS = 1200;
+
 export default function DashboardRedirect() {
   const { loading, role } = useAuth();
   const navigate = useNavigate();
@@ -26,16 +28,30 @@ export default function DashboardRedirect() {
         return;
       }
 
+      if (role === "farmer_pro") {
+        navigate("/dashboard/pro", { replace: true });
+        return;
+      }
+
+      if (role === "farmer_free") {
+        navigate("/dashboard/free", { replace: true });
+        return;
+      }
+
       setResolvingCompanyRedirect(true);
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new ApiError("Company redirect lookup timed out", 0)), COMPANY_REDIRECT_LOOKUP_TIMEOUT_MS);
+      });
+
       try {
-        await apiFetch("/companies/me");
+        await Promise.race([apiFetch("/companies/me"), timeoutPromise]);
         if (!cancelled) {
           navigate("/dashboard/company", { replace: true });
         }
         return;
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 404) {
+        if (!(error instanceof ApiError) || (error.status !== 404 && error.status !== 0 && error.status !== 401)) {
           console.error("Failed to resolve company redirect:", error);
         }
       } finally {
@@ -45,11 +61,6 @@ export default function DashboardRedirect() {
       }
 
       if (cancelled) return;
-
-      if (role === "farmer_pro" || role === "company") {
-        navigate("/dashboard/pro", { replace: true });
-        return;
-      }
 
       navigate("/dashboard/free", { replace: true });
     };

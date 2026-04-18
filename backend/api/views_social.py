@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .common import ApiException, api_view, ensure_profile_exists, method_not_allowed, now_iso, parse_json_body, require_auth
+from .common import ApiException, admin_client, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
 from .http import HttpRequest, HttpResponse, JsonResponse
 
 
@@ -16,7 +16,31 @@ def conversations_root(request: HttpRequest):
             filters={"or": f"(participant_a.eq.{request.user_id},participant_b.eq.{request.user_id})"},
             order="last_at.desc",
         )
-        return JsonResponse(rows or [], safe=False)
+        conversations = rows or []
+        other_ids = sorted(
+            {
+                conversation["participant_b"] if conversation.get("participant_a") == request.user_id else conversation.get("participant_a")
+                for conversation in conversations
+                if conversation.get("participant_a") and conversation.get("participant_b")
+            }
+        )
+        profiles_by_user_id = load_profiles_by_user_ids(admin_client(), other_ids, "user_id, full_name, photo_url")
+        enriched = []
+        for conversation in conversations:
+            other_id = (
+                conversation.get("participant_b")
+                if conversation.get("participant_a") == request.user_id
+                else conversation.get("participant_a")
+            )
+            other_profile = profiles_by_user_id.get(other_id or "", {})
+            enriched.append(
+                {
+                    **conversation,
+                    "other_name": other_profile.get("full_name") or "Unknown",
+                    "other_photo_url": other_profile.get("photo_url"),
+                }
+            )
+        return JsonResponse(enriched, safe=False)
     if request.method != "POST":
         return method_not_allowed(["GET", "POST"])
     other_user_id = parse_json_body(request).get("other_user_id")
