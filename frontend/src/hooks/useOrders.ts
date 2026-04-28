@@ -23,20 +23,47 @@ export type Order = {
   unit: string;
   total_price: number;
   delivery_fee: number;
-  status: string;
+  delivery_distance_km?: number | null;
+  delivery_base_fee?: number | null;
+  delivery_rate_per_km?: number | null;
+  inter_county_surcharge?: number | null;
+  delivery_mode?: "county_office_pickup" | string | null;
+  pickup_county?: string | null;
+  pickup_office_label?: string | null;
+  delivery_disclaimer?: string | null;
+  status: OrderStatus;
   payment_method: string | null;
   payment_ref: string | null;
-  payment_status: string;
+  payment_status: OrderPaymentStatus;
   merchant_request_id?: string | null;
   checkout_request_id?: string | null;
   payment_error?: string | null;
   paid_at?: string | null;
+  payment_verification_started_at?: string | null;
+  payment_verified_at?: string | null;
   escrow_amount?: number | null;
   agrilink_commission_rate?: number | null;
   agrilink_commission_amount?: number | null;
   seller_payout_amount?: number | null;
   payout_status?: string | null;
   escrow_received_at?: string | null;
+  delivery_proof_photo_url?: string | null;
+  delivery_proof_geo_lat?: number | null;
+  delivery_proof_geo_lng?: number | null;
+  delivery_proof_submitted_at?: string | null;
+  delivery_proof_submitted_by?: string | null;
+  delivery_proof_note?: string | null;
+  buyer_delivery_otp_requested_at?: string | null;
+  buyer_delivery_otp_expires_at?: string | null;
+  buyer_delivery_otp_verified_at?: string | null;
+  buyer_delivery_otp_attempts?: number | null;
+  delivery_signoff_status?: "pending_proof" | "pending_buyer_confirmation" | "confirmed" | "disputed" | "waived_by_admin" | string | null;
+  dispute_reason?: string | null;
+  dispute_opened_at?: string | null;
+  dispute_opened_by?: string | null;
+  dispute_resolved_at?: string | null;
+  dispute_resolution_note?: string | null;
+  dispute_deadline_at?: string | null;
   official_verified_at?: string | null;
   official_verified_by?: string | null;
   official_note?: string | null;
@@ -45,9 +72,12 @@ export type Order = {
   created_at: string;
   updated_at: string;
   product?: { name: string; image_emoji: string | null; cover_image_url: string | null } | null;
-  buyer_profile?: { full_name: string | null } | null;
-  farmer_profile?: { full_name: string | null } | null;
+  buyer_profile?: { full_name: string | null; county?: string | null } | null;
+  farmer_profile?: { full_name: string | null; county?: string | null } | null;
 };
+
+export type OrderStatus = "pending" | "confirmed" | "processing" | "shipped" | "delivered" | "cancelled";
+export type OrderPaymentStatus = "unpaid" | "initiated" | "pending_confirmation" | "paid" | "failed";
 
 type OrderRow = Omit<Order, "product" | "buyer_profile" | "farmer_profile">;
 
@@ -59,7 +89,7 @@ async function hydrateOrders(rows: OrderRow[]) {
 
   const [{ data: products, error: productsError }, { data: profiles, error: profilesError }] = await Promise.all([
     supabase.from("products").select("id, name, image_emoji, cover_image_url").in("id", productIds),
-    supabase.from("profiles").select("user_id, full_name").in("user_id", userIds),
+    supabase.from("profiles").select("user_id, full_name, county").in("user_id", userIds),
   ]);
 
   if (productsError) throw productsError;
@@ -78,18 +108,24 @@ async function hydrateOrders(rows: OrderRow[]) {
         }
       : null,
     buyer_profile: profilesByUserId.get(order.buyer_id)
-      ? { full_name: profilesByUserId.get(order.buyer_id)!.full_name }
+      ? {
+        full_name: profilesByUserId.get(order.buyer_id)!.full_name,
+        county: profilesByUserId.get(order.buyer_id)!.county,
+      }
       : null,
     farmer_profile: profilesByUserId.get(order.farmer_id)
-      ? { full_name: profilesByUserId.get(order.farmer_id)!.full_name }
+      ? {
+        full_name: profilesByUserId.get(order.farmer_id)!.full_name,
+        county: profilesByUserId.get(order.farmer_id)!.county,
+      }
       : null,
   }));
 }
 
 async function loadOrdersFromSupabase(userId: string) {
   const [{ data: sellingRows, error: sellingError }, { data: buyingRows, error: buyingError }] = await Promise.all([
-    supabase.from("orders").select("*").eq("farmer_id", userId).neq("payment_status", "failed").order("created_at", { ascending: false }),
-    supabase.from("orders").select("*").eq("buyer_id", userId).neq("payment_status", "failed").order("created_at", { ascending: false }),
+    supabase.from("orders").select("*").eq("farmer_id", userId).order("created_at", { ascending: false }),
+    supabase.from("orders").select("*").eq("buyer_id", userId).order("created_at", { ascending: false }),
   ]);
 
   if (sellingError) throw sellingError;
@@ -165,10 +201,10 @@ export function useOrders() {
 
   const placeOrder = async (payload: {
     product_id: string;
-    farmer_id: string;
     quantity: number;
     unit: string;
-    total_price: number;
+    delivery_distance_km?: number;
+    pickup_county?: string;
     delivery_fee?: number;
     notes?: string;
   }) => {
@@ -187,7 +223,7 @@ export function useOrders() {
     }
   };
 
-  const updateOrderStatus = async (orderId: string, status: string) => {
+  const updateOrderStatus = async (orderId: string, status: OrderStatus) => {
     try {
       await apiFetch<Order>(`/orders/${orderId}/status`, {
         method: "PATCH",
@@ -235,6 +271,68 @@ export function useOrders() {
     }
   };
 
+  const submitDeliveryProof = async (
+    orderId: string,
+    payload: { proof_photo_url: string; proof_geo_lat?: number; proof_geo_lng?: number; proof_note?: string },
+  ) => {
+    try {
+      await apiFetch<Order>(`/orders/${orderId}/delivery-proof`, {
+        method: "PATCH",
+        body: payload as unknown as BodyInit,
+      });
+      toast.success("Delivery proof submitted.");
+      await load(true);
+      return true;
+    } catch (error) {
+      toast.error("Failed to submit delivery proof: " + (error as Error).message);
+      return false;
+    }
+  };
+
+  const requestDeliveryOtp = async (orderId: string) => {
+    try {
+      const data = await apiFetch<{ otp_code: string; otp_expires_at: string }>(`/orders/${orderId}/delivery-otp/request`, {
+        method: "POST",
+      });
+      toast.success(`Delivery OTP generated (expires ${new Date(data.otp_expires_at).toLocaleString()}).`);
+      await load(true);
+      return data;
+    } catch (error) {
+      toast.error("Failed to request delivery OTP: " + (error as Error).message);
+      return null;
+    }
+  };
+
+  const verifyDeliveryOtp = async (orderId: string, otp_code: string) => {
+    try {
+      await apiFetch<{ message: string }>(`/orders/${orderId}/delivery-otp/verify`, {
+        method: "POST",
+        body: { otp_code } as unknown as BodyInit,
+      });
+      toast.success("Delivery confirmed.");
+      await load(true);
+      return true;
+    } catch (error) {
+      toast.error("Failed to verify delivery OTP: " + (error as Error).message);
+      return false;
+    }
+  };
+
+  const raiseDeliveryDispute = async (orderId: string, reason: string) => {
+    try {
+      await apiFetch<Order>(`/orders/${orderId}/dispute`, {
+        method: "POST",
+        body: { reason } as unknown as BodyInit,
+      });
+      toast.success("Dispute submitted.");
+      await load(true);
+      return true;
+    } catch (error) {
+      toast.error("Failed to submit dispute: " + (error as Error).message);
+      return false;
+    }
+  };
+
   return {
     sellingOrders,
     buyingOrders,
@@ -243,6 +341,10 @@ export function useOrders() {
     updateOrderStatus,
     initiateMpesaPayment,
     refreshMpesaPaymentStatus,
+    submitDeliveryProof,
+    requestDeliveryOtp,
+    verifyDeliveryOtp,
+    raiseDeliveryDispute,
     refetch: load,
   };
 }

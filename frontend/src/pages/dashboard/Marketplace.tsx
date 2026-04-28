@@ -6,7 +6,9 @@ import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMarketplaceProducts, type Product } from "@/hooks/useProducts";
 import { useOrders } from "@/hooks/useOrders";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
 import { formatApproxDistance, getApproxDistanceKm, normalizeLocationName } from "@/lib/locationDistance";
+import { buildDeliveryQuote, COUNTY_PICKUP_DISCLAIMER } from "@/lib/deliveryPricing";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -32,6 +34,7 @@ function isSameCounty(left: string | null | undefined, right: string | null | un
 export default function Marketplace() {
   const { products, loading, toggleLike, rateProduct } = useMarketplaceProducts();
   const { placeOrder } = useOrders();
+  const { addItem, totals: cartTotals } = useCart();
   const { user, profile } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
@@ -43,6 +46,7 @@ export default function Marketplace() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [quantity, setQuantity] = useState("1");
   const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
 
   const viewerCounty = profile?.county?.trim() || "";
   const viewerSubCounty = typeof window !== "undefined" ? window.localStorage.getItem("farm_sub_county") || "" : "";
@@ -137,6 +141,7 @@ export default function Marketplace() {
     if (!selectedProduct) return null;
     return products.find((product) => product.id === selectedProduct.id) ?? selectedProduct;
   }, [products, selectedProduct]);
+  const selectedProductId = selectedProduct?.id ?? null;
 
   useEffect(() => {
     if (!hasChosenCountyFilter && viewerCounty) {
@@ -159,9 +164,9 @@ export default function Marketplace() {
   }, [products, selectedProduct]);
 
   useEffect(() => {
-    if (!selectedProduct) return;
+    if (!selectedProductId) return;
     setQuantity("1");
-  }, [selectedProduct?.id]);
+  }, [selectedProductId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -213,7 +218,19 @@ export default function Marketplace() {
   };
 
   const parsedQuantity = Math.max(1, Number(quantity) || 1);
-  const total = syncedSelectedProduct ? syncedSelectedProduct.price_per_unit * parsedQuantity + 50 : 0;
+  const selectedProductQuote = useMemo(() => {
+    if (!syncedSelectedProduct) return null;
+    const productCounty = getProductCounty(syncedSelectedProduct);
+    const distanceKey = productCounty ? normalizeLocationName(productCounty) : "";
+    return buildDeliveryQuote({
+      buyerCounty: viewerCounty || null,
+      sellerCounty: productCounty || null,
+      distanceKm: distanceKey ? distanceByCounty[distanceKey] ?? null : null,
+    });
+  }, [syncedSelectedProduct, viewerCounty, distanceByCounty]);
+  const total = syncedSelectedProduct
+    ? syncedSelectedProduct.price_per_unit * parsedQuantity + Number(selectedProductQuote?.feeKes || 0)
+    : 0;
   const ratingChoices = [1, 2, 3, 4, 5];
   const selectedProductDistance = syncedSelectedProduct ? getProductDistanceLabel(syncedSelectedProduct) : null;
 
@@ -230,11 +247,10 @@ export default function Marketplace() {
     setIsCheckingOut(true);
     const createdOrder = await placeOrder({
       product_id: syncedSelectedProduct.id,
-      farmer_id: syncedSelectedProduct.farmer_id,
       quantity: parsedQuantity,
       unit: syncedSelectedProduct.unit,
-      total_price: syncedSelectedProduct.price_per_unit * parsedQuantity,
-      delivery_fee: 50,
+      delivery_distance_km: selectedProductQuote?.distanceKm,
+      pickup_county: selectedProductQuote?.pickupCounty || viewerCounty || undefined,
     });
 
     if (createdOrder) {
@@ -246,12 +262,44 @@ export default function Marketplace() {
     setIsCheckingOut(false);
   };
 
+  const handleAddToCart = async (product: Product, quantityToAdd: number) => {
+    if (!user) {
+      toast.error("Please sign in before adding items to cart.");
+      return false;
+    }
+
+    if (quantityToAdd <= 0) {
+      toast.error("Quantity must be greater than 0.");
+      return false;
+    }
+
+    if (quantityToAdd > Number(product.stock)) {
+      toast.error(`Only ${product.stock} ${product.unit} available for this product.`);
+      return false;
+    }
+
+    setIsAddingToCart(true);
+    const added = await addItem({
+      product_id: product.id,
+      quantity: quantityToAdd,
+      unit: product.unit,
+    });
+    setIsAddingToCart(false);
+
+    if (added) {
+      toast.success("Item added to cart.");
+      return true;
+    }
+
+    return false;
+  };
+
   return (
     <DashboardShell title="Marketplace">
       <div className="space-y-6">
         <section className="overflow-hidden rounded-[2rem] border border-emerald-200/70 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.16),transparent_28%),linear-gradient(135deg,rgba(236,253,245,0.96),rgba(255,255,255,0.99))] p-6 shadow-[0_20px_50px_-28px_rgba(16,185,129,0.38)] dark:border-emerald-500/20 dark:bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.18),transparent_28%),linear-gradient(135deg,rgba(10,24,18,0.96),rgba(15,23,42,0.98))] sm:p-8">
-          <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-            <div className="max-w-3xl space-y-3">
+            <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+              <div className="max-w-3xl space-y-3">
               <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300">
                 <Sprout className="h-4 w-4" />
                 <span className="text-sm font-semibold uppercase tracking-[0.2em]">Location-Aware Marketplace</span>
@@ -265,10 +313,24 @@ export default function Marketplace() {
                     ? `Marketplace is using ${viewerLocation || viewerCounty} as your reference point, showing nearby counties first and estimating seller distance in kilometres.`
                     : "Set your county in My Farm and the marketplace will prioritize nearby sellers, show county distance, and let you compare produce by location faster."}
                 </p>
+                </div>
+              </div>
+              <div className="w-full rounded-[1.5rem] border border-white/70 bg-white/80 p-4 shadow-sm dark:border-white/10 dark:bg-background/60 xl:max-w-xs">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Cart Overview</p>
+                <p className="mt-2 font-display text-2xl font-bold text-foreground">{cartTotals.itemCount} items</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  KES {cartTotals.total.toLocaleString()} estimated total with delivery.
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  <Button asChild variant="outline" className="rounded-xl">
+                    <Link to="/dashboard/cart">Open Cart</Link>
+                  </Button>
+                  <Button asChild className="rounded-xl">
+                    <Link to="/dashboard/orders">Orders</Link>
+                  </Button>
+                </div>
               </div>
             </div>
-
-          </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="rounded-[1.5rem] border border-white/80 bg-white/85 p-4 shadow-sm dark:border-white/10 dark:bg-background/60">
@@ -489,7 +551,7 @@ export default function Marketplace() {
                     </div>
                   </button>
 
-                  <div className="flex gap-2 px-3 pb-3">
+                  <div className="grid grid-cols-[auto_1fr_1fr] gap-2 px-3 pb-3">
                     <Button
                       type="button"
                       variant="outline"
@@ -498,11 +560,11 @@ export default function Marketplace() {
                     >
                       <Heart className={`h-4 w-4 ${product.liked_by_me ? "fill-rose-500 text-rose-500" : ""}`} />
                     </Button>
-                    <Button
-                      onClick={() => setSelectedProduct(product)}
-                      className="w-full rounded-xl bg-primary/10 text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-                    >
-                      <ShoppingCart className="mr-2 h-4 w-4" /> Buy
+                    <Button variant="outline" className="rounded-xl" onClick={() => void handleAddToCart(product, 1)}>
+                      <ShoppingCart className="mr-2 h-4 w-4" /> Add
+                    </Button>
+                    <Button onClick={() => setSelectedProduct(product)} className="rounded-xl bg-primary/10 text-primary transition-colors hover:bg-primary hover:text-primary-foreground">
+                      Buy Now
                     </Button>
                   </div>
                 </motion.article>
@@ -662,8 +724,14 @@ export default function Marketplace() {
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground">Delivery</span>
-                      <span className="font-medium text-foreground">KES 50</span>
+                      <span className="font-medium text-foreground">KES {Number(selectedProductQuote?.feeKes || 0).toLocaleString()}</span>
                     </div>
+                    {selectedProductQuote?.pickupOfficeLabel ? (
+                      <div className="flex items-center justify-between">
+                        <span className="text-muted-foreground">Pickup office</span>
+                        <span className="text-right font-medium text-foreground">{selectedProductQuote.pickupOfficeLabel}</span>
+                      </div>
+                    ) : null}
                     <div className="flex items-center justify-between">
                       <span className="text-muted-foreground">Payment</span>
                       <span className="font-medium text-foreground">M-Pesa</span>
@@ -678,30 +746,34 @@ export default function Marketplace() {
                 </div>
 
                 <div className="rounded-[1.75rem] border border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.96),rgba(255,255,255,0.95))] p-5 shadow-sm dark:border-emerald-500/30 dark:bg-[linear-gradient(135deg,rgba(6,78,59,0.28),rgba(15,23,42,0.94))]">
-                  <div className="flex items-start gap-3">
-                    <div className="space-y-1">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Next Step</p>
-                      <h4 className="font-display text-xl font-bold text-foreground">Create order first</h4>
-                      <p className="text-sm leading-6 text-muted-foreground">
-                        When you place the order here, it appears in your Orders page. Payment happens there once, so buyers do not get duplicate payment steps.
-                      </p>
+                    <div className="flex items-start gap-3">
+                      <div className="space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Next Step</p>
+                        <h4 className="font-display text-xl font-bold text-foreground">Use cart or order directly</h4>
+                        <p className="text-sm leading-6 text-muted-foreground">
+                          Add to cart for batch checkout, or place one direct order now. Delivery is county-office pickup and payout to the seller is only released after AgriLink official delivery confirmation.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-5 rounded-[1.25rem] border border-emerald-200/70 bg-white/85 px-4 py-3 text-sm text-muted-foreground dark:border-emerald-500/20 dark:bg-background/60">
+                      {COUNTY_PICKUP_DISCLAIMER}
                     </div>
                   </div>
-                  <div className="mt-5 rounded-[1.25rem] border border-emerald-200/70 bg-white/85 px-4 py-3 text-sm text-muted-foreground dark:border-emerald-500/20 dark:bg-background/60">
-                    Open Orders after placing the order to send the M-Pesa prompt only from one place.
-                  </div>
-                </div>
 
-                <DialogFooter className="flex-col gap-2 sm:flex-col">
+                  <DialogFooter className="flex-col gap-2 sm:flex-col">
                   <Button asChild variant="outline" className="h-12 w-full rounded-xl">
                     <Link to="/dashboard/messages">
-                      <MessageCircle className="mr-2 h-4 w-4" /> Message Farmer
-                    </Link>
+                        <MessageCircle className="mr-2 h-4 w-4" /> Message Farmer
+                      </Link>
+                    </Button>
+                  <Button variant="outline" onClick={() => syncedSelectedProduct && void handleAddToCart(syncedSelectedProduct, parsedQuantity)} disabled={isAddingToCart} className="h-12 w-full rounded-xl">
+                    <ShoppingCart className="mr-2 h-4 w-4" />
+                    {isAddingToCart ? "Adding to Cart..." : "Add to Cart"}
                   </Button>
-                  <Button onClick={() => void handleBuy()} disabled={isCheckingOut} className="h-12 w-full rounded-xl">
-                    {isCheckingOut ? "Creating Order..." : "Place Order"}
-                  </Button>
-                </DialogFooter>
+                    <Button onClick={() => void handleBuy()} disabled={isCheckingOut} className="h-12 w-full rounded-xl">
+                      {isCheckingOut ? "Creating Order..." : "Place Order"}
+                    </Button>
+                  </DialogFooter>
               </div>
             </div>
           )}

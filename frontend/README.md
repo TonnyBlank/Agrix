@@ -21,11 +21,13 @@ The frontend is a React + Vite application for farmers, companies, buyers, and a
 - farmer dashboard flows:
   - my farm
   - marketplace
+  - cart and checkout handoff
   - crop scanner
   - products
   - orders
   - messages
   - micro-loans
+  - paid-plan upgrade payment flow
 - company dashboard flows:
   - company hub
   - products
@@ -54,6 +56,10 @@ cd frontend
 npm install
 cp .env.example .env
 ```
+
+For a fresh Supabase project, run the root SQL bootstrap first:
+
+- `../setup_database.sql`
 
 ## Environment Variables
 

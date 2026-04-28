@@ -1102,11 +1102,12 @@ function MicroLoansDashboard() {
     }
     setRepaymentDialogLoan(application);
     setRepaymentAmount(String(Math.min(remainingBalance, application.loan_summary?.scheduledPayment ?? remainingBalance)));
-    setRepaymentPhone(profile?.phone || profile?.payout_mpesa_number || "");
+    setRepaymentPhone(application.repayment_method === "pay_with_produce" ? "" : profile?.phone || profile?.payout_mpesa_number || "");
   };
 
   const handleRepayment = async () => {
     if (!repaymentDialogLoan) return;
+    const paymentMethod = repaymentDialogLoan.repayment_method === "pay_with_produce" ? "pay_with_produce" : "mpesa";
 
     const amount = Number(repaymentAmount.replace(/[^\d.]/g, ""));
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -1114,7 +1115,7 @@ function MicroLoansDashboard() {
       return;
     }
 
-    if (!repaymentPhone.trim()) {
+    if (paymentMethod === "mpesa" && !repaymentPhone.trim()) {
       toast.error("Enter the M-Pesa number to receive the STK prompt.");
       return;
     }
@@ -1123,7 +1124,11 @@ function MicroLoansDashboard() {
     try {
       const response = await apiFetch<{ message: string; loan: LoanApplication }>(`/micro-loans/applications/${repaymentDialogLoan.id}/repay`, {
         method: "POST",
-        body: JSON.stringify({ amount, phoneNumber: repaymentPhone }) as unknown as BodyInit,
+        body: JSON.stringify({
+          amount,
+          paymentMethod,
+          phoneNumber: paymentMethod === "mpesa" ? repaymentPhone : null,
+        }) as unknown as BodyInit,
       });
       setApplications((current) => current.map((item) => (item.id === repaymentDialogLoan.id ? response.loan : item)));
       setSelectedLoanReceipt((current) => (current?.id === repaymentDialogLoan.id ? response.loan : current));
@@ -1138,23 +1143,26 @@ function MicroLoansDashboard() {
         toast.error((error as Error).message);
       } else {
         try {
-          const normalizedPhone = normalizeKenyanPhoneInput(repaymentPhone);
+          const normalizedPhone = paymentMethod === "mpesa" ? normalizeKenyanPhoneInput(repaymentPhone) : null;
           const remainingBalance = Number(repaymentDialogLoan.loan_summary?.remainingBalance ?? 0);
           if (amount > remainingBalance) {
             throw new Error(`Repayment exceeds the current balance of KES ${remainingBalance.toFixed(2)}.`);
           }
 
-          const paymentRef = `LN-${Date.now()}`;
+          const paymentRef = `${paymentMethod === "mpesa" ? "LN" : "PWP"}-${Date.now()}`;
+          const repaymentNote = paymentMethod === "mpesa"
+            ? `M-Pesa repayment posted to ${repaymentDialogLoan.product_title}.`
+            : `Pay with Produce repayment allocation posted to ${repaymentDialogLoan.product_title}.`;
           const { data: _insertedRepayment, error: repaymentError } = await supabase
             .from("micro_loan_repayments")
             .insert({
               loan_application_id: repaymentDialogLoan.id,
               user_id: user.id,
               amount,
-              payment_method: "mpesa",
+              payment_method: paymentMethod,
               payment_ref: paymentRef,
               phone_number: normalizedPhone,
-              note: `M-Pesa repayment posted to ${repaymentDialogLoan.product_title}.`,
+              note: repaymentNote,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             } as unknown as any)
             .select("*")
@@ -1212,7 +1220,7 @@ function MicroLoansDashboard() {
           const updatedLoan = enrichLoanApplication(updatedLoanRow, updatedRepayments);
           setApplications((current) => current.map((item) => (item.id === repaymentDialogLoan.id ? updatedLoan : item)));
           setSelectedLoanReceipt((current) => (current?.id === repaymentDialogLoan.id ? updatedLoan : current));
-          toast.success(`Repayment of KES ${amount.toFixed(2)} received successfully.`);
+          toast.success(`${paymentMethod === "mpesa" ? "M-Pesa" : "Pay with Produce"} repayment of KES ${amount.toFixed(2)} received successfully.`);
           setLastUpdated(new Date());
           setRepaymentDialogLoan(null);
           setRepaymentAmount("");
@@ -2175,9 +2183,13 @@ function MicroLoansDashboard() {
       <Dialog open={Boolean(repaymentDialogLoan)} onOpenChange={(open) => !open && setRepaymentDialogLoan(null)}>
         <DialogContent className="rounded-[2rem] sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle className="font-display text-2xl">Repay Loan via M-Pesa</DialogTitle>
+            <DialogTitle className="font-display text-2xl">
+              {repaymentDialogLoan?.repayment_method === "pay_with_produce" ? "Post Pay-with-Produce Repayment" : "Repay Loan via M-Pesa"}
+            </DialogTitle>
             <DialogDescription>
-              Enter the amount and the phone number that should receive the STK push prompt on the SIM card.
+              {repaymentDialogLoan?.repayment_method === "pay_with_produce"
+                ? "Enter the amount to allocate against this loan from produce-settlement proceeds."
+                : "Enter the amount and the phone number that should receive the STK push prompt on the SIM card."}
             </DialogDescription>
           </DialogHeader>
 
@@ -2207,18 +2219,20 @@ function MicroLoansDashboard() {
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="repayment-phone">M-Pesa number</label>
-              <input
-                id="repayment-phone"
-                type="tel"
-                inputMode="tel"
-                value={repaymentPhone}
-                onChange={(event) => setRepaymentPhone(sanitizePhoneInput(event.target.value))}
-                placeholder="07XXXXXXXX"
-                className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
-              />
-            </div>
+            {repaymentDialogLoan?.repayment_method === "pay_with_produce" ? null : (
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground" htmlFor="repayment-phone">M-Pesa number</label>
+                <input
+                  id="repayment-phone"
+                  type="tel"
+                  inputMode="tel"
+                  value={repaymentPhone}
+                  onChange={(event) => setRepaymentPhone(sanitizePhoneInput(event.target.value))}
+                  placeholder="07XXXXXXXX"
+                  className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+                />
+              </div>
+            )}
           </div>
 
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
@@ -2226,7 +2240,13 @@ function MicroLoansDashboard() {
               Cancel
             </Button>
             <Button type="button" className="rounded-xl" disabled={repayingLoanId === repaymentDialogLoan?.id} onClick={() => void handleRepayment()}>
-              {repayingLoanId === repaymentDialogLoan?.id ? "Sending prompt..." : "Send M-Pesa Prompt"}
+              {repayingLoanId === repaymentDialogLoan?.id
+                ? repaymentDialogLoan?.repayment_method === "pay_with_produce"
+                  ? "Posting repayment..."
+                  : "Sending prompt..."
+                : repaymentDialogLoan?.repayment_method === "pay_with_produce"
+                  ? "Post Repayment"
+                  : "Send M-Pesa Prompt"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -73,13 +73,16 @@ const companyNav = [
   { title: "Partners", url: "/dashboard/company/partners", icon: Users },
   { title: "Orders", url: "/dashboard/company/orders", icon: ClipboardList },
   { title: "Procurement", url: "/dashboard/company/procurement", icon: ClipboardList },
+  { title: "Marketplace", url: "/dashboard/marketplace", icon: ShoppingCart },
+  { title: "Cart", url: "/dashboard/cart", icon: ShoppingCart },
+  { title: "Marketplace Orders", url: "/dashboard/orders", icon: ClipboardList },
   { title: "Company Profile", url: "/dashboard/company/settings", icon: Settings2 },
   { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
-  { title: "Marketplace", url: "/dashboard/marketplace", icon: ShoppingCart },
 ];
 
 const tradeNav = [
   { title: "Marketplace", url: "/dashboard/marketplace", icon: ShoppingCart },
+  { title: "Cart", url: "/dashboard/cart", icon: ShoppingCart },
   { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
   { title: "Orders", url: "/dashboard/orders", icon: ClipboardList },
 ];

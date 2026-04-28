@@ -14,8 +14,8 @@ import {
   Truck,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { useOrders, type Order } from "@/hooks/useOrders";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useOrders, type Order, type OrderStatus } from "@/hooks/useOrders";
 import { useAuth } from "@/hooks/useAuth";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
@@ -420,11 +420,19 @@ function ReceiptDialog({ order, onOpenChange }: { order: Order | null; onOpenCha
   );
 }
 
-function OrderActions({ order, view, busy, onChangeStatus }: { order: Order; view: "selling" | "buying"; busy: boolean; onChangeStatus: (status: string) => void; }) {
+function OrderActions({ order, view, busy, onChangeStatus }: { order: Order; view: "selling" | "buying"; busy: boolean; onChangeStatus: (status: OrderStatus) => void; }) {
+  const isPaid = order.payment_status === "paid";
   if (view === "selling") {
+    if (!isPaid && ["pending", "confirmed", "processing"].includes(order.status)) {
+      return (
+        <Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}>
+          {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />} Cancel
+        </Button>
+      );
+    }
     if (order.status === "pending") return <><Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("confirmed")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />} Accept</Button><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}><X className="mr-1 h-3 w-3" /> Decline</Button></>;
-    if (order.status === "confirmed") return <><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("processing")}><Settings2 className="mr-1 h-3 w-3" /> Process</Button><Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("shipped")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Truck className="mr-1 h-3 w-3" />} Ship</Button></>;
-    if (order.status === "processing") return <Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("shipped")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Truck className="mr-1 h-3 w-3" />} Ship</Button>;
+    if (order.status === "confirmed") return <><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("processing")}><Settings2 className="mr-1 h-3 w-3" /> Process</Button><Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("shipped")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Truck className="mr-1 h-3 w-3" />} Ship</Button><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}><X className="mr-1 h-3 w-3" /> Cancel</Button></>;
+    if (order.status === "processing") return <><Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("shipped")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Truck className="mr-1 h-3 w-3" />} Ship</Button><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}><X className="mr-1 h-3 w-3" /> Cancel</Button></>;
   }
   if (view === "buying") {
     if (order.status === "pending") return <Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />} Cancel</Button>;
@@ -481,12 +489,23 @@ function OrdersDesktopTable(props: {
   startIndex?: number;
   view: "selling" | "buying";
   busyOrderId: string | null;
-  onChangeStatus: (orderId: string, status: string) => void;
+  verificationCountdownByOrder: Record<string, number>;
+  onChangeStatus: (orderId: string, status: OrderStatus) => void;
   onOpenPayment: (order: Order) => void;
   onRefreshPayment: (orderId: string) => void;
   onViewReceipt: (order: Order) => void;
 }) {
-  const { orders, startIndex = 0, view, busyOrderId, onChangeStatus, onOpenPayment, onRefreshPayment, onViewReceipt } = props;
+  const {
+    orders,
+    startIndex = 0,
+    view,
+    busyOrderId,
+    verificationCountdownByOrder,
+    onChangeStatus,
+    onOpenPayment,
+    onRefreshPayment,
+    onViewReceipt,
+  } = props;
 
   return (
     <div className="overflow-x-auto rounded-[1rem] border border-border/70 bg-white/90 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
@@ -519,6 +538,7 @@ function OrdersDesktopTable(props: {
                     : "Awaiting shipment";
             const paidLabel = order.paid_at ? "Paid" : order.payment_status;
             const busy = busyOrderId === order.id;
+            const verifyCountdown = verificationCountdownByOrder[order.id] ?? 0;
 
             return (
               <tr key={order.id} className="border-b border-border/70 align-top text-sm last:border-b-0">
@@ -568,11 +588,23 @@ function OrdersDesktopTable(props: {
                         {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <CreditCard className="mr-1 h-3 w-3" />}
                         Pay with M-Pesa
                       </Button>
-                      <Button size="sm" variant="outline" className="h-8 rounded-xl px-3 text-xs" disabled={busy || !order.checkout_request_id} onClick={() => onRefreshPayment(order.id)}>
-                        <RefreshCw className="mr-1 h-3 w-3" /> Check M-Pesa
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-xl px-3 text-xs"
+                        disabled={busy || !order.checkout_request_id || verifyCountdown > 0}
+                        onClick={() => onRefreshPayment(order.id)}
+                      >
+                        <RefreshCw className="mr-1 h-3 w-3" />
+                        {verifyCountdown > 0 ? `Verifying in ${verifyCountdown}s` : "Check M-Pesa"}
                       </Button>
                     </div>
                   )}
+                  {verifyCountdown > 0 ? (
+                    <p className="mt-2 text-right text-xs text-muted-foreground">
+                      M-Pesa prompt sent. Automatic verification starts in {verifyCountdown}s.
+                    </p>
+                  ) : null}
                   {order.payment_error && <p className="mt-2 text-right text-xs text-destructive">{order.payment_error}</p>}
                 </td>
               </tr>
@@ -692,7 +724,7 @@ function OrderCard(props: {
   order: Order;
   view: "selling" | "buying";
   busy: boolean;
-  onChangeStatus: (status: string) => void;
+  onChangeStatus: (status: OrderStatus) => void;
   onOpenPayment: () => void;
   onRefreshPayment: () => void;
   onViewReceipt: (order: Order) => void;
@@ -841,6 +873,8 @@ export default function Orders() {
   const { sellingOrders, buyingOrders, loading, updateOrderStatus, initiateMpesaPayment, refreshMpesaPaymentStatus } = useOrders();
   const { profile } = useAuth();
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [verificationCountdownByOrder, setVerificationCountdownByOrder] = useState<Record<string, number>>({});
+  const [showPendingPayments, setShowPendingPayments] = useState(false);
   const [paymentPhoneByOrder, setPaymentPhoneByOrder] = useState<Record<string, string>>({});
   const [paymentDialogOrder, setPaymentDialogOrder] = useState<Order | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
@@ -849,6 +883,66 @@ export default function Orders() {
   const [sellingPage, setSellingPage] = useState(1);
   const [buyingPage, setBuyingPage] = useState(1);
   const [shippingPage, setShippingPage] = useState(1);
+  const paymentVerificationIntervalsRef = useRef<Record<string, number>>({});
+  const paymentVerificationTimeoutsRef = useRef<Record<string, number>>({});
+
+  const clearPaymentVerificationWindow = (orderId: string) => {
+    const activeInterval = paymentVerificationIntervalsRef.current[orderId];
+    if (activeInterval) {
+      window.clearInterval(activeInterval);
+      delete paymentVerificationIntervalsRef.current[orderId];
+    }
+
+    const activeTimeout = paymentVerificationTimeoutsRef.current[orderId];
+    if (activeTimeout) {
+      window.clearTimeout(activeTimeout);
+      delete paymentVerificationTimeoutsRef.current[orderId];
+    }
+
+    setVerificationCountdownByOrder((current) => {
+      if (current[orderId] === undefined) return current;
+      const next = { ...current };
+      delete next[orderId];
+      return next;
+    });
+  };
+
+  const startPaymentVerificationWindow = (orderId: string) => {
+    clearPaymentVerificationWindow(orderId);
+    setVerificationCountdownByOrder((current) => ({ ...current, [orderId]: 10 }));
+
+    paymentVerificationIntervalsRef.current[orderId] = window.setInterval(() => {
+      setVerificationCountdownByOrder((current) => {
+        const existing = current[orderId];
+        if (existing === undefined) return current;
+        if (existing <= 1) {
+          const next = { ...current };
+          delete next[orderId];
+          return next;
+        }
+        return { ...current, [orderId]: existing - 1 };
+      });
+    }, 1000);
+
+    paymentVerificationTimeoutsRef.current[orderId] = window.setTimeout(() => {
+      clearPaymentVerificationWindow(orderId);
+      setBusyOrderId(orderId);
+      void refreshMpesaPaymentStatus(orderId).finally(() => setBusyOrderId(null));
+    }, 10_000);
+  };
+
+  useEffect(() => {
+    return () => {
+      for (const orderId of Object.keys(paymentVerificationIntervalsRef.current)) {
+        window.clearInterval(paymentVerificationIntervalsRef.current[orderId]);
+      }
+      for (const orderId of Object.keys(paymentVerificationTimeoutsRef.current)) {
+        window.clearTimeout(paymentVerificationTimeoutsRef.current[orderId]);
+      }
+      paymentVerificationIntervalsRef.current = {};
+      paymentVerificationTimeoutsRef.current = {};
+    };
+  }, []);
 
   const shippingOrders = useMemo(
     () =>
@@ -880,14 +974,33 @@ export default function Orders() {
     });
   }, [buyingOrders, profile?.phone, profile?.payout_mpesa_number]);
 
+  useEffect(() => {
+    for (const order of buyingOrders) {
+      if (order.payment_status === "paid" || order.status === "cancelled" || order.payment_status === "failed") {
+        clearPaymentVerificationWindow(order.id);
+      }
+    }
+  }, [buyingOrders]);
+
   const filteredSellingOrders = useMemo(
     () => sellingOrders.filter((order) => matchesTransactionSearch(order, transactionSearch)),
     [sellingOrders, transactionSearch],
   );
 
+  const pendingPaymentOrders = useMemo(
+    () => buyingOrders.filter((order) => order.payment_status !== "paid" && order.status !== "cancelled"),
+    [buyingOrders],
+  );
+
+  const paidBuyingOrders = useMemo(
+    () => buyingOrders.filter((order) => order.payment_status === "paid" || order.status === "cancelled"),
+    [buyingOrders],
+  );
+
   const filteredBuyingOrders = useMemo(
-    () => buyingOrders.filter((order) => matchesTransactionSearch(order, transactionSearch)),
-    [buyingOrders, transactionSearch],
+    () =>
+      (showPendingPayments ? pendingPaymentOrders : paidBuyingOrders).filter((order) => matchesTransactionSearch(order, transactionSearch)),
+    [paidBuyingOrders, pendingPaymentOrders, showPendingPayments, transactionSearch],
   );
 
   const filteredShippingOrders = useMemo(
@@ -901,7 +1014,7 @@ export default function Orders() {
 
   useEffect(() => {
     setBuyingPage(1);
-  }, [transactionSearch, filteredBuyingOrders.length]);
+  }, [showPendingPayments, transactionSearch, filteredBuyingOrders.length]);
 
   useEffect(() => {
     setShippingPage(1);
@@ -946,22 +1059,26 @@ export default function Orders() {
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   }, [activeExportRange, buyingOrders, sellingOrders]);
 
-  const handleChangeStatus = async (orderId: string, status: string) => {
+  const handleChangeStatus = async (orderId: string, status: OrderStatus) => {
     setBusyOrderId(orderId);
     await updateOrderStatus(orderId, status);
     setBusyOrderId(null);
   };
 
-  const handleStartPayment = async (orderId: string) => {
+  const handleRefreshPayment = async (orderId: string) => {
+    clearPaymentVerificationWindow(orderId);
     setBusyOrderId(orderId);
-    await initiateMpesaPayment(orderId, paymentPhoneByOrder[orderId] || "");
-    setPaymentDialogOrder(null);
+    await refreshMpesaPaymentStatus(orderId);
     setBusyOrderId(null);
   };
 
-  const handleRefreshPayment = async (orderId: string) => {
+  const handleStartPayment = async (orderId: string) => {
     setBusyOrderId(orderId);
-    await refreshMpesaPaymentStatus(orderId);
+    const started = await initiateMpesaPayment(orderId, paymentPhoneByOrder[orderId] || "");
+    if (started) {
+      startPaymentVerificationWindow(orderId);
+    }
+    setPaymentDialogOrder(null);
     setBusyOrderId(null);
   };
 
@@ -1214,6 +1331,7 @@ export default function Orders() {
                     startIndex={(sellingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="selling"
                     busyOrderId={busyOrderId}
+                    verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
                     onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
@@ -1225,15 +1343,35 @@ export default function Orders() {
             </TabsContent>
 
             <TabsContent value="buying" className="mt-5 space-y-3">
+              <div className="rounded-[1.1rem] border border-amber-200/70 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-foreground">Buyer payment and pickup consistency</p>
+                    <p className="text-xs text-muted-foreground">
+                      Delivery is county-office pickup. Buyer funds land in AgriLink escrow first, then seller payout is released after official delivery sign-off.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => setShowPendingPayments((current) => !current)}
+                  >
+                    {showPendingPayments ? "Show Paid / Completed" : `Show Pending Payments (${pendingPaymentOrders.length})`}
+                  </Button>
+                </div>
+              </div>
               {loading && <div className="rounded-[1.2rem] border border-border bg-white/85 p-4 text-sm text-muted-foreground">Loading buying orders...</div>}
               {!loading && !filteredBuyingOrders.length && (
                 <OrderEmptyState
                   icon={ShoppingBag}
-                  title={transactionSearch ? "No matching purchase orders" : "No purchase orders yet"}
+                  title={transactionSearch ? "No matching purchase orders" : showPendingPayments ? "No pending payment orders" : "No paid purchase orders yet"}
                   detail={
                     transactionSearch
                       ? "Try another transaction ID, receipt number, or checkout reference."
-                      : "Orders you place as a buyer will be organized here."
+                      : showPendingPayments
+                        ? "Pending M-Pesa confirmations will appear here after checkout."
+                        : "Paid and completed buyer orders are organized here."
                   }
                 />
               )}
@@ -1244,6 +1382,7 @@ export default function Orders() {
                     startIndex={(buyingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="buying"
                     busyOrderId={busyOrderId}
+                    verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
                     onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
@@ -1285,7 +1424,7 @@ export default function Orders() {
         open={Boolean(paymentDialogOrder)}
         onOpenChange={(open) => !open && setPaymentDialogOrder(null)}
         title="Pay order with M-Pesa"
-        description="Confirm the number that should receive the STK push for this order. You can come back to Orders and use Check M-Pesa if the confirmation takes a moment."
+        description="Confirm the number that should receive the STK push for this order. Verification starts after about 10 seconds, and delivery is fulfilled through the AgriLink county office pickup flow."
         amountValue={
           paymentDialogOrder
             ? `KES ${(Number(paymentDialogOrder.total_price) + Number(paymentDialogOrder.delivery_fee || 0)).toLocaleString()}`

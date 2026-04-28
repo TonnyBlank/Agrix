@@ -695,7 +695,7 @@ def company_orders_list(request: HttpRequest):
         
         # Get status filter if provided
         status_filter = request.GET.get("status")
-        filters = {"company_id": f"eq.{company_id}", "status": "neq.failed"}
+        filters = {"company_id": f"eq.{company_id}"}
         if status_filter:
             filters["status"] = f"eq.{status_filter}"
         

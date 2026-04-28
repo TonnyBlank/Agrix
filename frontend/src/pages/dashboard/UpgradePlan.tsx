@@ -6,12 +6,31 @@ import type { Database } from "@/integrations/supabase/types";
 import { motion } from "framer-motion";
 import { Check, Zap, Crown, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
+import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
 
 type AppRole = Database["public"]["Enums"]["app_role"];
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+type SubscriptionPayment = {
+  id: string;
+  user_id: string;
+  plan_role: AppRole;
+  amount_kes: number;
+  currency: string;
+  payment_method: string;
+  payment_status: string;
+  merchant_request_id: string | null;
+  checkout_request_id: string | null;
+  payment_ref: string | null;
+  payment_error: string | null;
+  paid_at: string | null;
+  plan_started_at: string | null;
+  plan_expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
 
 const plans = [
   {
@@ -69,31 +88,114 @@ export default function UpgradePlan() {
   const { role, profile, applyProfileUpdate, setActiveRole } = useAuth();
   const navigate = useNavigate();
   const [upgrading, setUpgrading] = useState<string | null>(null);
+  const [paymentDialogPlan, setPaymentDialogPlan] = useState<AppRole | null>(null);
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [checkingPaymentId, setCheckingPaymentId] = useState<string | null>(null);
+  const [pendingSubscriptionPayment, setPendingSubscriptionPayment] = useState<{ paymentId: string; planId: AppRole } | null>(null);
+
+  useEffect(() => {
+    if (paymentPhone.trim()) return;
+    const defaultPhone = profile?.phone?.trim() || profile?.payout_mpesa_number?.trim() || "";
+    if (defaultPhone) setPaymentPhone(defaultPhone);
+  }, [paymentPhone, profile?.phone, profile?.payout_mpesa_number]);
+
+  const pendingPlan = useMemo(() => pendingSubscriptionPayment?.planId ?? null, [pendingSubscriptionPayment]);
+
+  const finalizePaidPlan = (data: { role?: AppRole | null; profile?: Profile | null }, fallbackRole: AppRole) => {
+    if (data.profile) {
+      applyProfileUpdate(data.profile);
+    }
+    const nextRole = (data.role || fallbackRole) as AppRole;
+    setActiveRole(nextRole, { expiresAt: data.profile?.plan_expires_at ?? null });
+    setPendingSubscriptionPayment(null);
+    toast.success(`${plans.find((plan) => plan.id === nextRole)?.name || nextRole} is now active.`, {
+      icon: <Zap className="w-4 h-4" />,
+    });
+    navigate(nextRole === "farmer_pro" ? "/dashboard/pro" : "/dashboard/free");
+  };
+
+  const checkSubscriptionPaymentStatus = async (paymentId: string, planId: AppRole) => {
+    setCheckingPaymentId(paymentId);
+    try {
+      const data = await apiFetch<{
+        payment_status: "pending_confirmation" | "paid" | "failed";
+        resultDesc?: string;
+        role?: AppRole;
+        profile?: Profile;
+        payment?: SubscriptionPayment;
+      }>(`/payments/subscriptions/${paymentId}/mpesa-status`);
+
+      if (data.payment_status === "paid") {
+        finalizePaidPlan({ role: data.role, profile: data.profile }, planId);
+        return;
+      }
+
+      if (data.payment_status === "failed") {
+        setPendingSubscriptionPayment(null);
+        toast.error(data.resultDesc || "Subscription payment failed. Please try again.");
+        return;
+      }
+
+      toast.message(data.resultDesc || "Payment is still processing. Check again in a few seconds.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not check M-Pesa payment status.");
+    } finally {
+      setCheckingPaymentId(null);
+    }
+  };
+
+  const handleSubscriptionPaymentStart = async () => {
+    if (!paymentDialogPlan) return;
+    if (!paymentPhone.trim()) {
+      toast.error("Enter the M-Pesa number that should receive the STK prompt.");
+      return;
+    }
+
+    setUpgrading(paymentDialogPlan);
+    toast.info("Sending M-Pesa prompt...", { icon: <Smartphone className="w-4 h-4" /> });
+
+    try {
+      const response = await apiFetch<{ message: string; payment: SubscriptionPayment }>("/payments/subscriptions/mpesa", {
+        method: "POST",
+        body: {
+          planRole: paymentDialogPlan,
+          phoneNumber: paymentPhone,
+        },
+      });
+      toast.success(response.message || "M-Pesa prompt sent.");
+      const paymentId = response.payment.id;
+      setPendingSubscriptionPayment({ paymentId, planId: paymentDialogPlan });
+      setPaymentDialogPlan(null);
+      await checkSubscriptionPaymentStatus(paymentId, paymentDialogPlan);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not start subscription payment.");
+    } finally {
+      setUpgrading(null);
+    }
+  };
 
   const handleUpgrade = async (planId: AppRole) => {
     if (planId === role) return;
-    setUpgrading(planId);
 
-    toast.info("Activating your plan...", { icon: <Smartphone className="w-4 h-4" /> });
+    if (planId === "farmer_pro" || planId === "company") {
+      setPaymentDialogPlan(planId);
+      return;
+    }
+
+    setUpgrading(planId);
+    toast.info("Switching your plan...", { icon: <Smartphone className="w-4 h-4" /> });
 
     try {
       const data = await apiFetch<{ role: AppRole; profile: Profile }>("/profiles/me/role", {
         method: "PATCH",
         body: { role: planId },
       });
-
       applyProfileUpdate(data.profile);
       setActiveRole(data.role, { expiresAt: data.profile.plan_expires_at });
-
-      const planName = plans.find((p) => p.id === planId)?.name ?? planId;
-      toast.success(`${planName} is now active.`, {
+      toast.success(`${plans.find((p) => p.id === planId)?.name ?? planId} is now active.`, {
         icon: <Zap className="w-4 h-4" />,
       });
-      navigate(
-        planId === "farmer_pro"
-          ? "/dashboard/pro"
-          : "/dashboard/free",
-      );
+      navigate("/dashboard/free");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not activate this plan.", {
         icon: <Smartphone className="w-4 h-4" />,
@@ -102,6 +204,7 @@ export default function UpgradePlan() {
       setUpgrading(null);
     }
   };
+  const paymentDialogPlanDetails = plans.find((plan) => plan.id === paymentDialogPlan);
 
   return (
     <DashboardShell title="Upgrade Plan">
@@ -162,8 +265,14 @@ export default function UpgradePlan() {
               </div>
 
               <Button
-                onClick={() => handleUpgrade(plan.id)}
-                disabled={isCurrent || upgrading !== null}
+                onClick={() => {
+                  if (pendingSubscriptionPayment && pendingSubscriptionPayment.planId === plan.id) {
+                    void checkSubscriptionPaymentStatus(pendingSubscriptionPayment.paymentId, pendingSubscriptionPayment.planId);
+                    return;
+                  }
+                  void handleUpgrade(plan.id);
+                }}
+                disabled={isCurrent || upgrading !== null || (pendingSubscriptionPayment !== null && pendingSubscriptionPayment.planId !== plan.id)}
                 className={`w-full rounded-xl ${
                   isCurrent
                     ? "bg-muted text-muted-foreground cursor-default"
@@ -172,8 +281,21 @@ export default function UpgradePlan() {
                     : "bg-primary text-primary-foreground"
                 }`}
               >
-                {isCurrent ? "Current Plan" : upgrading === plan.id ? "Processing..." : `Upgrade to ${plan.name}`}
+                {isCurrent
+                  ? "Current Plan"
+                  : pendingSubscriptionPayment && pendingSubscriptionPayment.planId === plan.id
+                  ? checkingPaymentId === pendingSubscriptionPayment.paymentId
+                    ? "Checking M-Pesa..."
+                    : "Check M-Pesa"
+                  : upgrading === plan.id
+                  ? "Processing..."
+                  : `Upgrade to ${plan.name}`}
               </Button>
+              {pendingPlan === plan.id ? (
+                <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                  Payment request created. Use Check M-Pesa after approving the prompt on your phone.
+                </p>
+              ) : null}
               {isCurrent && profile?.plan_expires_at ? (
                 <p className="mt-3 text-center text-[11px] text-muted-foreground">
                   Active until {formatPlanDate(profile.plan_expires_at)}
@@ -183,6 +305,22 @@ export default function UpgradePlan() {
           );
         })}
       </div>
+
+      <MpesaPaymentDialog
+        open={Boolean(paymentDialogPlan)}
+        onOpenChange={(open) => !open && setPaymentDialogPlan(null)}
+        title={`Pay for ${paymentDialogPlanDetails?.name || "your plan"}`}
+        description="Confirm the number that should receive the M-Pesa STK prompt. Your plan activates immediately after payment is confirmed."
+        amountValue={paymentDialogPlanDetails ? `${paymentDialogPlanDetails.price}${paymentDialogPlanDetails.period === "forever" ? "" : paymentDialogPlanDetails.period}` : undefined}
+        referenceLabel="Subscription"
+        referenceValue={paymentDialogPlanDetails ? `${paymentDialogPlanDetails.name} monthly plan` : undefined}
+        phoneNumber={paymentPhone}
+        onPhoneChange={setPaymentPhone}
+        onConfirm={() => void handleSubscriptionPaymentStart()}
+        busy={Boolean(paymentDialogPlan && upgrading === paymentDialogPlan)}
+        confirmLabel="Send M-Pesa Prompt"
+        confirmPendingLabel="Sending prompt..."
+      />
 
       {/* Why PRO section */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }} className="mx-auto mt-10 max-w-4xl">

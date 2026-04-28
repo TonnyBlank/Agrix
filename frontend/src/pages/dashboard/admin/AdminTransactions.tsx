@@ -22,8 +22,25 @@ function totalOrderValue(order: AdminOrder) {
   return (order.total_price ?? 0) + Number(order.delivery_fee ?? 0);
 }
 
+function isReleaseReadyBySignoff(order: AdminOrder) {
+  if (order.delivery_signoff_status === "waived_by_admin") return true;
+  if (order.delivery_signoff_status !== "confirmed") return false;
+  if (!order.dispute_deadline_at) return false;
+  return new Date(order.dispute_deadline_at).getTime() <= Date.now();
+}
+
 function canReleasePayout(order: AdminOrder) {
-  return order.payment_status === "paid" && order.status === "delivered" && order.payout_status !== "released";
+  return (
+    order.payment_status === "paid" &&
+    order.status === "delivered" &&
+    order.payout_status !== "released" &&
+    !order.dispute_opened_at &&
+    isReleaseReadyBySignoff(order)
+  );
+}
+
+function canOverrideRelease(order: AdminOrder) {
+  return order.payment_status === "paid" && order.status === "delivered" && order.payout_status !== "released" && !canReleasePayout(order);
 }
 
 function canConfirmDelivery(order: AdminOrder) {
@@ -84,7 +101,7 @@ function TransactionsDesktopTable({
   startIndex: number;
   savingKey: string | null;
   onConfirmDelivery: (order: AdminOrder) => void;
-  onReleasePayout: (order: AdminOrder) => void;
+  onReleasePayout: (order: AdminOrder, forceOverride?: boolean) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-[1rem] border border-border/70 bg-white/90 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
@@ -155,17 +172,30 @@ function TransactionsDesktopTable({
                   {order.paid_at ? `Paid ${formatDateTime(order.paid_at)}` : "Payment pending"}
                 </p>
                 <p className="text-xs text-muted-foreground">
+                  {order.pickup_office_label || (order.pickup_county ? `${order.pickup_county} AgriLink County Office` : "Pickup office not set")}
+                </p>
+                <p className="text-xs text-muted-foreground">
                   {order.official_verified_at ? `Official sign-off ${formatDateTime(order.official_verified_at)}` : "Official sign-off pending"}
                 </p>
+                <p className="text-xs text-muted-foreground">
+                  Signoff flow: {order.delivery_signoff_status || "pending_proof"}
+                </p>
+                {order.dispute_deadline_at ? (
+                  <p className="text-xs text-muted-foreground">Dispute window closes {formatDateTime(order.dispute_deadline_at)}</p>
+                ) : null}
               </td>
               <td className="px-4 py-3.5">
-                {canReleasePayout(order) ? (
+                {canConfirmDelivery(order) ? (
+                  <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => onConfirmDelivery(order)}>
+                    {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                  </Button>
+                ) : canReleasePayout(order) ? (
                   <Button className="rounded-xl" size="sm" disabled={savingKey === `release-${order.id}`} onClick={() => onReleasePayout(order)}>
                     {savingKey === `release-${order.id}` ? "Releasing..." : "Official Sign-Off"}
                   </Button>
-                ) : canConfirmDelivery(order) ? (
-                  <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => onConfirmDelivery(order)}>
-                    {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                ) : canOverrideRelease(order) ? (
+                  <Button className="rounded-xl" size="sm" variant="outline" disabled={savingKey === `release-${order.id}`} onClick={() => onReleasePayout(order, true)}>
+                    {savingKey === `release-${order.id}` ? "Releasing..." : "Override Release"}
                   </Button>
                 ) : (
                   <span className="text-xs text-muted-foreground">
@@ -201,6 +231,8 @@ function TransactionCard({ order }: { order: AdminOrder }) {
           <p className="mt-1 text-sm text-muted-foreground">Buyer: {order.buyer_profile?.full_name || "Unknown buyer"}</p>
           <p className="mt-1 text-sm text-muted-foreground">Farmer: {order.farmer_profile?.full_name || "Unknown farmer"}</p>
           <p className="mt-1 break-all text-xs text-muted-foreground">Receipt {order.payment_ref || "No receipt ref"}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{order.pickup_office_label || (order.pickup_county ? `${order.pickup_county} AgriLink County Office` : "Pickup office not set")}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Signoff flow: {order.delivery_signoff_status || "pending_proof"}</p>
         </div>
         <div className="text-right">
           <p className="font-semibold text-foreground">{formatMoney(totalOrderValue(order))}</p>
@@ -278,19 +310,25 @@ export default function AdminTransactions() {
     }
   };
 
-  const handleReleasePayout = async (order: AdminOrder) => {
+  const handleReleasePayout = async (order: AdminOrder, forceOverride = false) => {
     const savingId = `release-${order.id}`;
     setSavingKey(savingId);
     setErrorMessage(null);
     try {
+      const overrideReason = forceOverride ? window.prompt("Enter override reason (required):", "")?.trim() : undefined;
+      if (forceOverride && !overrideReason) {
+        setSavingKey(null);
+        return;
+      }
       const updated = await apiFetch<AdminOrder>(`/admin/orders/${order.id}/release`, {
         method: "PATCH",
         body: {
           official_note: "Official AgriLink delivery sign-off completed. Seller payout released after escrow verification.",
+          override_reason: overrideReason,
         } as unknown as BodyInit,
       });
       setOrders((current) => current.map((item) => (item.id === order.id ? updated : item)));
-      toast.success("Seller payout released after official sign-off.");
+      toast.success(forceOverride ? "Seller payout released using admin override." : "Seller payout released after official sign-off.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not release seller payout.";
       setErrorMessage(message);
@@ -312,11 +350,7 @@ export default function AdminTransactions() {
         } as unknown as BodyInit,
       });
       setOrders((current) => current.map((item) => (item.id === order.id ? updated : item)));
-      toast.success(
-        updated.payment_status === "paid"
-          ? "Delivery confirmed and seller payout released."
-          : "Delivery confirmed by admin.",
-      );
+      toast.success("Delivery confirmed by admin. Buyer signoff is now required before payout release.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not confirm delivery.";
       setErrorMessage(message);
@@ -373,7 +407,7 @@ export default function AdminTransactions() {
               </div>
               <h2 className="mt-4 font-display text-3xl font-bold text-foreground">Transactions desk</h2>
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                Buyer funds land in AgriLink escrow first. AgriLink keeps 5% commission, then seller payout is only released after delivery is signed off here by an official.
+                Buyer funds land in AgriLink escrow first. AgriLink keeps 5% commission, then seller payout is released after buyer OTP signoff (or documented admin override).
               </p>
             </div>
             <Button type="button" variant="outline" className="rounded-xl bg-background/80" onClick={() => void handleDownload()} disabled={savingKey === "download-csv"}>
@@ -436,13 +470,17 @@ export default function AdminTransactions() {
                         <p className="font-medium text-foreground">AgriLink commission: {formatMoney(Number(order.agrilink_commission_amount || 0))}</p>
                         <p className="text-xs text-muted-foreground">Seller payout: {formatMoney(Number(order.seller_payout_amount || 0))} • {order.payout_status || "pending_payment"}</p>
                       </div>
-                      {canReleasePayout(order) ? (
+                      {canConfirmDelivery(order) ? (
+                        <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => void handleConfirmDelivery(order)}>
+                          {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                        </Button>
+                      ) : canReleasePayout(order) ? (
                         <Button className="rounded-xl" size="sm" disabled={savingKey === `release-${order.id}`} onClick={() => void handleReleasePayout(order)}>
                           {savingKey === `release-${order.id}` ? "Releasing..." : "Official Sign-Off"}
                         </Button>
-                      ) : canConfirmDelivery(order) ? (
-                        <Button className="rounded-xl" size="sm" disabled={savingKey === `confirm-${order.id}`} onClick={() => void handleConfirmDelivery(order)}>
-                          {savingKey === `confirm-${order.id}` ? "Confirming..." : "Confirm Delivery"}
+                      ) : canOverrideRelease(order) ? (
+                        <Button className="rounded-xl" size="sm" variant="outline" disabled={savingKey === `release-${order.id}`} onClick={() => void handleReleasePayout(order, true)}>
+                          {savingKey === `release-${order.id}` ? "Releasing..." : "Override Release"}
                         </Button>
                       ) : null}
                     </div>

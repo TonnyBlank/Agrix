@@ -1,11 +1,9 @@
 -- ============================================================
--- AgriLink X - Profile Schema Update
--- Run this in your Supabase SQL Editor
--- Covers:
--- 1. Personal profile fields
--- 2. Farm profile fields
--- 3. Payout profile fields
--- 4. Paid-plan subscription window fields
+-- AgriLink X - Legacy Profile Patch
+-- NOTE:
+-- - This patch is already included in setup_database.sql.
+-- - For a fresh project, run setup_database.sql only.
+-- - Use this file only to patch older environments.
 -- ============================================================
 
 alter table public.profiles
@@ -55,6 +53,12 @@ create policy "Users can update own profile"
   for update
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+drop policy if exists "profiles_public_read" on public.profiles;
+create policy "profiles_public_read"
+  on public.profiles
+  for select
+  using (true);
 
 select column_name, data_type, is_nullable
 from information_schema.columns

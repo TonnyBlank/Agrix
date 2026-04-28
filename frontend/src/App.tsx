@@ -22,6 +22,7 @@ import MyFarm from "./pages/dashboard/MyFarm";
 import MyProducts from "./pages/dashboard/MyProducts";
 import Marketplace from "./pages/dashboard/Marketplace";
 import Orders from "./pages/dashboard/Orders";
+import Cart from "./pages/dashboard/Cart";
 import AIScanner from "./pages/dashboard/AIScanner";
 import CropCalendar from "./pages/dashboard/CropCalendar";
 import Community from "./pages/dashboard/Community";
@@ -101,11 +102,12 @@ const App = () => (
             <Route path="/dashboard/enterprise" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><LegacyEnterpriseRedirect /></ProtectedRoute>} />
             <Route path="/dashboard/preview/farmer-free" element={<ProtectedRoute><FarmerFreeDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/preview/farmer-pro" element={<ProtectedRoute><FarmerProDashboard /></ProtectedRoute>} />
-            <Route path="/dashboard/analytics" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><PerformanceAnalytics /></ProtectedRoute>} />
+            <Route path="/dashboard/analytics" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><PerformanceAnalytics /></ProtectedRoute>} />
             <Route path="/dashboard/farm" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MyFarm /></ProtectedRoute>} />
             <Route path="/dashboard/products" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MyProducts /></ProtectedRoute>} />
             <Route path="/dashboard/marketplace" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Marketplace /></ProtectedRoute>} />
-            <Route path="/dashboard/orders" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Orders /></ProtectedRoute>} />
+            <Route path="/dashboard/cart" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Cart /></ProtectedRoute>} />
+            <Route path="/dashboard/orders" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Orders /></ProtectedRoute>} />
             <Route path="/dashboard/ai-scanner" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><AIScanner /></ProtectedRoute>} />
             <Route path="/dashboard/calendar" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><CropCalendar /></ProtectedRoute>} />
             <Route path="/dashboard/community" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Community /></ProtectedRoute>} />

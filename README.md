@@ -17,7 +17,9 @@ Core capabilities include:
 - farmer profiles with contact, county, payout, and farm operation details
 - farm records with GPS coordinates, crop activities, and profile enrichment
 - produce listing and marketplace ordering
+- persisted buyer carts with quantity validation
 - M-Pesa-backed order payments and payout release workflow
+- M-Pesa-backed paid-plan subscription activation with payment ledger tracking
 - messaging between users around sourcing and trade
 - ID verification and admin approval flows
 - micro-loans with readiness checks, security requirements, repayment tracking, and branch review
@@ -88,10 +90,10 @@ The marketplace supports produce discovery, ordering, and fulfillment.
 Key flow:
 
 1. A seller creates a product listing.
-2. A buyer places an order.
+2. A buyer can add products to cart (or place an order directly).
 3. The system calculates subtotal, delivery fee, escrow amount, platform commission, and seller payout.
 4. The buyer pays via M-Pesa STK push.
-5. Payment state is tracked on the order.
+5. Payment state is tracked on the order and reconciled with payout state.
 6. Delivery and official sign-off drive payout release.
 
 Important order concepts in the schema and backend:
@@ -106,6 +108,18 @@ Important order concepts in the schema and backend:
 - `payout_status`
 - `official_verified_at`
 - `payout_released_at`
+
+Cart consistency concepts:
+
+- `cart_items.buyer_id + product_id` unique pair
+- quantity and stock validation before checkout/order placement
+- owner-only cart row access via RLS policies
+
+Subscription payment consistency concepts:
+
+- `subscription_payments` ledger rows for paid plans
+- plan role, amount, checkout IDs, and payment status stored together
+- plan windows (`plan_started_at`, `plan_expires_at`) only finalized after paid status
 
 The backend contains logic for:
 
@@ -323,7 +337,9 @@ Important tables and domains in the current system include:
 - `profiles`
 - `user_roles`
 - `products`
+- `cart_items`
 - `orders`
+- `subscription_payments`
 - `conversations`
 - `messages`
 - `crop_events`
@@ -366,8 +382,10 @@ These are the main route groups exposed by the Django backend:
 - `/health`
 - `/api/scanner/crops`
 - `/api/products`
+- `/api/cart`
 - `/api/orders`
 - `/api/payments`
+- `/api/payments/subscriptions`
 - `/api/profiles`
 - `/api/messages`
 - `/api/crop-events`
@@ -415,21 +433,47 @@ npm install
 cp .env.example .env
 ```
 
-### 4. Run the backend
+### 4. Bootstrap the database (required)
+
+Run the full consolidated setup script in your Supabase SQL Editor:
+
+```sql
+-- open and run the full file
+setup_database.sql
+```
+
+This file is idempotent and already includes the schema from:
+
+- `frontend/supabase_migration.sql`
+- `supabase/migrations/`
+- `frontend/supabase/migrations/`
+- `add_farm_details.sql`
+
+### 5. (Optional) Assign an admin role to one user
+
+After the target user has signed up, run:
+
+```sql
+insert into public.user_roles (user_id, role)
+values ('YOUR_AUTH_USER_UUID', 'admin')
+on conflict (user_id, role) do nothing;
+```
+
+### 6. Run the backend
 
 ```bash
 cd backend
 .venv/bin/python manage.py runserver 127.0.0.1:3001
 ```
 
-### 5. Run the frontend
+### 7. Run the frontend
 
 ```bash
 cd frontend
 npm run dev
 ```
 
-### 6. Open locally
+### 8. Open locally
 
 - frontend: `http://localhost:8080`
 - backend health check: `http://127.0.0.1:3001/health`
@@ -470,24 +514,28 @@ GEMINI_MODEL=gemini-2.5-flash
 
 ## Database and Migration Strategy
 
-The repository contains both bootstrap SQL and granular migration history.
+`setup_database.sql` is the authoritative, all-in-one bootstrap script for this project.
+
+It is kept in sync with the SQL history and includes the required schema from:
+
+- `frontend/supabase_migration.sql`
+- `supabase/migrations/`
+- `frontend/supabase/migrations/`
+- `add_farm_details.sql` (legacy patch)
+
+Use this rule to avoid drift and duplicate execution errors:
+
+- fresh environment: run `setup_database.sql` only
+- historical investigation: read timestamped migration folders as reference history
+- schema changes: update `setup_database.sql` first, then record migration snapshots if needed
 
 Important files:
 
-- `setup_database.sql`
-- `supabase/migrations/`
-- `frontend/supabase_migration.sql`
-- `frontend/supabase/migrations/`
-
-Recommended rule:
-
-- use one migration strategy consistently per environment
-- do not blindly run every SQL file twice
-
-Practical guidance:
-
-- use `setup_database.sql` when bootstrapping a fresh environment quickly
-- use timestamped migrations in `supabase/migrations/` and `frontend/supabase/migrations/` when you want step-by-step schema history
+- `setup_database.sql` (authoritative bootstrap)
+- `frontend/supabase_migration.sql` (mirrored bootstrap copy)
+- `supabase/migrations/` (historical step-by-step snapshots)
+- `frontend/supabase/migrations/` (historical frontend-side snapshots)
+- `add_farm_details.sql` (legacy profile patch retained for backwards compatibility)
 
 Recent financing schema additions include support for:
 

@@ -5,7 +5,8 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime
+import secrets
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
@@ -57,6 +58,165 @@ def _normalize_optional_account_number(value: Any, field_label: str = "Bank acco
         raise ApiException(f"{field_label} must contain digits only.", 400)
     return digits
 AGRILINK_COMMISSION_RATE = 0.05
+ORDER_STATUS_VALUES = {"pending", "confirmed", "processing", "shipped", "delivered", "cancelled"}
+PAID_PLAN_ROLES = {"farmer_pro", "company"}
+SUBSCRIPTION_PLAN_DEFAULTS = {
+    "farmer_pro": {"amount_kes": 1500, "display_name": "Farmer Pro"},
+    "company": {"amount_kes": 5000, "display_name": "Company"},
+}
+COUNTY_PICKUP_DISCLAIMER = (
+    "Delivery will be made through your county AgriLink office. "
+    "Please claim your produce there after payment and official confirmation."
+)
+DELIVERY_BASE_FEE_KES = 50.0
+DELIVERY_RATE_PER_KM_KES = 2.5
+DELIVERY_INTER_COUNTY_SURCHARGE_KES = 75.0
+DELIVERY_MIN_INTER_COUNTY_DISTANCE_KM = 5.0
+DELIVERY_FALLBACK_INTER_COUNTY_DISTANCE_KM = 60.0
+DELIVERY_MAX_FEE_KES = 2500.0
+DELIVERY_SIGNOFF_STATUSES = {
+    "pending_proof",
+    "pending_buyer_confirmation",
+    "confirmed",
+    "disputed",
+    "waived_by_admin",
+}
+DELIVERY_SIGNOFF_RELEASE_READY_STATUSES = {"confirmed", "waived_by_admin"}
+DELIVERY_OTP_LENGTH = 6
+DELIVERY_OTP_MAX_ATTEMPTS = 5
+DELIVERY_OTP_TTL_MINUTES = 30
+DELIVERY_DISPUTE_WINDOW_HOURS = 24
+
+
+def _subscription_amount_kes(plan_role: str) -> int:
+    env_map = {
+        "farmer_pro": os.getenv("SUBSCRIPTION_FARMER_PRO_AMOUNT_KES"),
+        "company": os.getenv("SUBSCRIPTION_COMPANY_AMOUNT_KES"),
+    }
+    configured = env_map.get(plan_role)
+    if configured is not None and str(configured).strip():
+        try:
+            parsed = int(float(str(configured)))
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            pass
+    return SUBSCRIPTION_PLAN_DEFAULTS[plan_role]["amount_kes"]
+
+
+def _derive_payout_status(order_status: str, payment_status: str) -> str:
+    if order_status == "cancelled":
+        return "cancelled"
+    if payment_status != "paid":
+        return "pending_payment"
+    if order_status == "delivered":
+        return "awaiting_official_signoff"
+    return "awaiting_delivery"
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    return str(value or "").strip() or None
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _normalize_delivery_signoff_status(value: Any, fallback: str = "pending_proof") -> str:
+    status = str(value or "").strip().lower()
+    return status if status in DELIVERY_SIGNOFF_STATUSES else fallback
+
+
+def _parse_optional_coordinate(value: Any, label: str, lower_bound: float, upper_bound: float) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ApiException(f"{label} must be a valid number.", 400)
+    if parsed < lower_bound or parsed > upper_bound:
+        raise ApiException(f"{label} must be between {lower_bound} and {upper_bound}.", 400)
+    return round(parsed, 7)
+
+
+def _delivery_otp_secret() -> str:
+    return os.getenv("DELIVERY_OTP_SECRET") or "agrilink-delivery-signoff"
+
+
+def _hash_delivery_otp(order_id: str, otp_code: str) -> str:
+    payload = f"{order_id}:{otp_code}:{_delivery_otp_secret()}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _generate_delivery_otp_code() -> str:
+    return f"{secrets.randbelow(10**DELIVERY_OTP_LENGTH):0{DELIVERY_OTP_LENGTH}d}"
+
+
+def _normalize_county_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _is_same_county(left: str | None, right: str | None) -> bool:
+    normalized_left = _normalize_county_text(left)
+    normalized_right = _normalize_county_text(right)
+    return bool(normalized_left and normalized_right and normalized_left == normalized_right)
+
+
+def _parse_optional_distance_km(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ApiException("Delivery distance must be a valid number.", 400)
+    if parsed < 0:
+        raise ApiException("Delivery distance cannot be negative.", 400)
+    return round(parsed, 2)
+
+
+def _build_delivery_quote(distance_km: float | None, buyer_county: str | None, seller_county: str | None) -> dict[str, Any]:
+    same_county = _is_same_county(buyer_county, seller_county)
+    effective_distance = float(distance_km) if distance_km is not None else (
+        0.0 if same_county else DELIVERY_FALLBACK_INTER_COUNTY_DISTANCE_KM
+    )
+    effective_distance = max(effective_distance, 0.0)
+
+    surcharge = 0.0
+    if not same_county:
+        effective_distance = max(effective_distance, DELIVERY_MIN_INTER_COUNTY_DISTANCE_KM)
+        surcharge = DELIVERY_INTER_COUNTY_SURCHARGE_KES
+
+    fee_kes = min(
+        DELIVERY_BASE_FEE_KES + surcharge + (effective_distance * DELIVERY_RATE_PER_KM_KES),
+        DELIVERY_MAX_FEE_KES,
+    )
+    pickup_county = _clean_optional_text(buyer_county) or _clean_optional_text(seller_county)
+
+    return {
+        "same_county": same_county,
+        "distance_km": round(effective_distance, 2),
+        "fee_kes": round(fee_kes, 2),
+        "base_fee_kes": DELIVERY_BASE_FEE_KES,
+        "rate_per_km_kes": DELIVERY_RATE_PER_KM_KES,
+        "inter_county_surcharge_kes": round(surcharge, 2),
+        "pickup_county": pickup_county,
+        "pickup_office_label": f"{pickup_county} AgriLink County Office" if pickup_county else None,
+    }
+
+
+def _resolve_buyer_farmer_counties(client, buyer_id: str, farmer_id: str | None) -> tuple[str | None, str | None]:
+    party_ids = sorted({item for item in [buyer_id, farmer_id] if item})
+    if not party_ids:
+        return None, None
+    profiles_by_user_id = load_profiles_by_user_ids(client, party_ids, "user_id, county")
+    buyer_county = _clean_optional_text((profiles_by_user_id.get(buyer_id) or {}).get("county"))
+    farmer_county = _clean_optional_text((profiles_by_user_id.get(farmer_id or "") or {}).get("county"))
+    return buyer_county, farmer_county
 
 
 def attach_order_meta(client, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -69,7 +229,7 @@ def attach_order_meta(client, orders: list[dict[str, Any]]) -> list[dict[str, An
         select="id, name, image_emoji, cover_image_url, category",
         filters={"id": f"in.{postgrest_in(product_ids)}"},
     )
-    profiles, _ = client.select("profiles", select="user_id, full_name", filters={"user_id": f"in.{postgrest_in(user_ids)}"})
+    profiles, _ = client.select("profiles", select="user_id, full_name, county", filters={"user_id": f"in.{postgrest_in(user_ids)}"})
     products_by_id = {row["id"]: row for row in products or []}
     profiles_by_id = {row["user_id"]: row for row in profiles or []}
     result = []
@@ -86,8 +246,18 @@ def attach_order_meta(client, orders: list[dict[str, Any]]) -> list[dict[str, An
                 }
                 if product
                 else None,
-                "buyer_profile": {"full_name": profiles_by_id.get(order["buyer_id"], {}).get("full_name")} if profiles_by_id.get(order["buyer_id"]) else None,
-                "farmer_profile": {"full_name": profiles_by_id.get(order["farmer_id"], {}).get("full_name")} if profiles_by_id.get(order["farmer_id"]) else None,
+                "buyer_profile": {
+                    "full_name": profiles_by_id.get(order["buyer_id"], {}).get("full_name"),
+                    "county": profiles_by_id.get(order["buyer_id"], {}).get("county"),
+                }
+                if profiles_by_id.get(order["buyer_id"])
+                else None,
+                "farmer_profile": {
+                    "full_name": profiles_by_id.get(order["farmer_id"], {}).get("full_name"),
+                    "county": profiles_by_id.get(order["farmer_id"], {}).get("county"),
+                }
+                if profiles_by_id.get(order["farmer_id"])
+                else None,
             }
         )
     return result
@@ -135,8 +305,12 @@ def build_marketplace_products(client, current_user_id: str | None = None) -> li
     return result
 
 
-def get_allowed_statuses(current_status: str, is_farmer: bool) -> list[str]:
+def get_allowed_statuses(current_status: str, is_farmer: bool, payment_status: str) -> list[str]:
     if is_farmer:
+        if payment_status != "paid":
+            if current_status in {"pending", "confirmed", "processing"}:
+                return ["cancelled"]
+            return []
         if current_status == "pending":
             return ["confirmed", "cancelled"]
         if current_status == "confirmed":
@@ -144,7 +318,7 @@ def get_allowed_statuses(current_status: str, is_farmer: bool) -> list[str]:
         if current_status == "processing":
             return ["shipped", "cancelled"]
         return []
-    if current_status == "pending":
+    if current_status == "pending" and payment_status != "paid":
         return ["cancelled"]
     return []
 
@@ -246,7 +420,15 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
         )
 
 
-def release_order_payout(client, order: dict[str, Any], verified_by_user_id: str, official_note: str | None = None):
+def release_order_payout(
+    client,
+    order: dict[str, Any],
+    verified_by_user_id: str,
+    official_note: str | None = None,
+    *,
+    allow_admin_override: bool = False,
+    override_reason: str | None = None,
+):
     if order.get("payment_status") != "paid":
         raise ApiException("Buyer funds must reach the AgriLink escrow account before payout can be released.", 400)
     if order.get("status") != "delivered":
@@ -254,15 +436,51 @@ def release_order_payout(client, order: dict[str, Any], verified_by_user_id: str
     if order.get("payout_status") == "released":
         return order
 
+    signoff_status = _normalize_delivery_signoff_status(order.get("delivery_signoff_status"), "pending_proof")
+    has_open_dispute = bool(order.get("dispute_opened_at"))
+    now_dt = datetime.utcnow()
+    dispute_deadline = _parse_iso_datetime(order.get("dispute_deadline_at"))
+    dispute_window_open = bool(dispute_deadline and now_dt < dispute_deadline)
+    override_note = _clean_optional_text(override_reason)
+    using_override = bool(allow_admin_override and override_note)
+
+    if has_open_dispute and not using_override:
+        raise ApiException("Seller payout is blocked while the buyer dispute is still open.", 400)
+
+    if signoff_status not in DELIVERY_SIGNOFF_RELEASE_READY_STATUSES and not using_override:
+        raise ApiException("Seller payout requires buyer delivery sign-off or an admin waiver reason.", 400)
+
+    if dispute_window_open and not using_override:
+        deadline_label = dispute_deadline.replace(microsecond=0).isoformat() + "Z"
+        raise ApiException(f"Wait until the dispute window closes at {deadline_label} before releasing payout.", 400)
+
+    now_label = now_iso()
+    next_signoff_status = "waived_by_admin" if using_override else signoff_status
+    next_official_note = official_note if official_note is not None else order.get("official_note")
+    if using_override:
+        marker = f"Admin override reason: {override_note}"
+        next_official_note = f"{next_official_note}\n{marker}".strip() if next_official_note else marker
+
+    next_dispute_resolution_note = order.get("dispute_resolution_note")
+    if using_override and has_open_dispute:
+        next_dispute_resolution_note = override_note
+
+    update_payload: dict[str, Any] = {
+        "payout_status": "released",
+        "delivery_signoff_status": next_signoff_status,
+        "official_verified_at": order.get("official_verified_at") or now_label,
+        "official_verified_by": order.get("official_verified_by") or verified_by_user_id,
+        "official_note": next_official_note,
+        "payout_released_at": order.get("payout_released_at") or now_label,
+        "dispute_opened_at": None if using_override else order.get("dispute_opened_at"),
+        "dispute_opened_by": None if using_override else order.get("dispute_opened_by"),
+        "dispute_resolved_at": now_label if using_override and has_open_dispute else order.get("dispute_resolved_at"),
+        "dispute_resolution_note": next_dispute_resolution_note,
+    }
+
     updated = client.update(
         "orders",
-        {
-            "payout_status": "released",
-            "official_verified_at": order.get("official_verified_at") or now_iso(),
-            "official_verified_by": order.get("official_verified_by") or verified_by_user_id,
-            "official_note": official_note if official_note is not None else order.get("official_note"),
-            "payout_released_at": order.get("payout_released_at") or now_iso(),
-        },
+        update_payload,
         filters={"id": f"eq.{order['id']}"},
         single=True,
     )
@@ -273,22 +491,109 @@ def release_order_payout(client, order: dict[str, Any], verified_by_user_id: str
 def mark_order_paid(order_id: str, checkout_request_id: str, receipt_number: str | None = None):
     admin = admin_client()
     order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    if not order:
+        raise ApiException("Order not found while confirming payment.", 404)
     financials = compute_order_financials(order or {})
+    payout_status = _derive_payout_status(str(order.get("status") or "pending"), "paid")
+    verified_at = now_iso()
     admin.update(
         "orders",
         {
             "payment_status": "paid",
             "payment_ref": receipt_number or checkout_request_id,
-            "paid_at": now_iso(),
+            "paid_at": verified_at,
             "payment_error": None,
             "escrow_amount": financials["escrow_amount"],
             "agrilink_commission_rate": AGRILINK_COMMISSION_RATE,
             "agrilink_commission_amount": financials["agrilink_commission_amount"],
             "seller_payout_amount": financials["seller_payout_amount"],
-            "escrow_received_at": now_iso(),
-            "payout_status": "awaiting_delivery",
+            "escrow_received_at": verified_at,
+            "payout_status": payout_status,
+            "payment_verified_at": verified_at,
+            "delivery_mode": order.get("delivery_mode") or "county_office_pickup",
+            "pickup_county": order.get("pickup_county"),
+            "pickup_office_label": order.get("pickup_office_label"),
+            "delivery_disclaimer": order.get("delivery_disclaimer") or COUNTY_PICKUP_DISCLAIMER,
         },
         filters={"id": f"eq.{order_id}"},
+    )
+
+
+def _extract_mpesa_receipt_number(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+
+    candidates = [
+        payload.get("MpesaReceiptNumber"),
+        payload.get("mpesaReceiptNumber"),
+        payload.get("ReceiptNumber"),
+        payload.get("receiptNumber"),
+    ]
+
+    for value in candidates:
+        if value not in (None, ""):
+            return str(value).strip()
+
+    metadata = (((payload.get("CallbackMetadata") or {}).get("Item")) if isinstance(payload.get("CallbackMetadata"), dict) else []) or []
+    for item in metadata:
+        if str(item.get("Name") or "").strip() == "MpesaReceiptNumber" and item.get("Value") not in (None, ""):
+            return str(item.get("Value")).strip()
+    return None
+
+
+def _activate_paid_subscription(
+    payment_id: str,
+    user_id: str,
+    plan_role: str,
+    checkout_request_id: str | None,
+    receipt_number: str | None = None,
+    fallback_full_name: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if plan_role not in PAID_PLAN_ROLES:
+        raise ApiException("Invalid paid plan for subscription activation.", 400)
+
+    admin = admin_client()
+    existing_payment, _ = admin.select(
+        "subscription_payments",
+        select="id, payment_status, paid_at, plan_started_at, plan_expires_at, plan_role, user_id",
+        filters={"id": f"eq.{payment_id}"},
+        single=True,
+    )
+    if existing_payment and existing_payment.get("payment_status") == "paid":
+        profile, _ = admin.select("profiles", filters={"user_id": f"eq.{user_id}"}, single=True)
+        return existing_payment, profile or {}
+
+    updated_profile = set_user_role_with_plan(user_id, plan_role, fallback_full_name)
+    updated_payment = admin.update(
+        "subscription_payments",
+        {
+            "payment_status": "paid",
+            "payment_ref": receipt_number or checkout_request_id,
+            "payment_error": None,
+            "paid_at": (existing_payment or {}).get("paid_at") or now_iso(),
+            "plan_started_at": updated_profile.get("plan_started_at"),
+            "plan_expires_at": updated_profile.get("plan_expires_at"),
+        },
+        filters={"id": f"eq.{payment_id}"},
+        single=True,
+    )
+    return updated_payment, updated_profile
+
+
+def _restock_cancelled_order_item(client, order: dict[str, Any]) -> None:
+    if not order.get("product_id"):
+        return
+    if order.get("status") not in {"pending", "confirmed", "processing"}:
+        return
+
+    product, _ = client.select("products", select="id, stock", filters={"id": f"eq.{order['product_id']}"}, single=True)
+    if not product:
+        return
+    next_stock = round(float(product.get("stock") or 0) + float(order.get("quantity") or 0), 2)
+    client.update(
+        "products",
+        {"stock": next_stock, "is_available": next_stock > 0},
+        filters={"id": f"eq.{order['product_id']}"},
     )
 
 
@@ -505,6 +810,32 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
     }
 
 
+def _persist_crop_scanner_scan(
+    request: HttpRequest,
+    *,
+    file_name: str,
+    mime_type: str,
+    image_content: bytes,
+    analysis_mode: str,
+    advisory: str,
+    result: dict[str, Any],
+    scanned_at: str,
+) -> dict[str, Any]:
+    payload = {
+        "user_id": request.user_id,
+        "file_name": str(file_name or "crop-scan.jpg"),
+        "mime_type": mime_type,
+        "image_size_bytes": len(image_content),
+        "image_sha256": hashlib.sha256(image_content).hexdigest(),
+        "analysis_mode": analysis_mode,
+        "advisory": str(advisory or "").strip() or "No advisory available.",
+        "result": result,
+        "scanned_at": scanned_at,
+        "created_at": scanned_at,
+    }
+    return request.supabase.insert("crop_scanner_scans", payload, single=True)
+
+
 def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) -> dict[str, Any]:
     api_key = _get_gemini_api_key()
     if not api_key:
@@ -595,34 +926,53 @@ def scanner_crops(request: HttpRequest):
         raise ApiException("Image must be 8MB or less.", 400)
 
     fallback_reason: str | None = None
+    analysis_mode = "heuristic"
+    advisory = ""
+    result = _build_scanner_result(image.name, content)
     if _get_gemini_api_key():
         try:
             result = _call_gemini_crop_scanner(image.name, image.content_type or "image/jpeg", content)
-            return JsonResponse(
-                {
-                    "result": result,
-                    "scannedAt": now_iso(),
-                    "analysisMode": "gemini",
-                    "advisory": "AI output can be wrong. Confirm serious or spreading symptoms with an agronomist.",
-                }
-            )
+            analysis_mode = "gemini"
+            advisory = "AI output can be wrong. Confirm serious or spreading symptoms with an agronomist."
         except (ApiException, requests.RequestException, json.JSONDecodeError) as exc:
             fallback_reason = str(exc) or exc.__class__.__name__
             logger.warning("Gemini crop scan fallback triggered: %s", fallback_reason)
+            result = _build_scanner_result(image.name, content)
+            analysis_mode = "heuristic"
+
+    if analysis_mode == "heuristic":
+        advisory = (
+            "This result is guidance only and should be confirmed if symptoms worsen or spread quickly. "
+            + (
+                f"Gemini fallback reason: {fallback_reason}."
+                if fallback_reason
+                else "Add GEMINI_API_KEY on the backend to enable Gemini analysis."
+            )
+        )
+
+    scanned_at = now_iso()
+    scan_record: dict[str, Any] = {}
+    try:
+        scan_record = _persist_crop_scanner_scan(
+            request,
+            file_name=image.name,
+            mime_type=image.content_type or "image/jpeg",
+            image_content=content,
+            analysis_mode=analysis_mode,
+            advisory=advisory,
+            result=result,
+            scanned_at=scanned_at,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist crop scanner result; continuing with response: %s", exc)
 
     return JsonResponse(
         {
-            "result": _build_scanner_result(image.name, content),
-            "scannedAt": now_iso(),
-            "analysisMode": "heuristic",
-            "advisory": (
-                "This result is guidance only and should be confirmed if symptoms worsen or spread quickly. "
-                + (
-                    f"Gemini fallback reason: {fallback_reason}."
-                    if fallback_reason
-                    else "Add GEMINI_API_KEY on the backend to enable Gemini analysis."
-                )
-            ),
+            "scanId": scan_record.get("id"),
+            "result": result,
+            "scannedAt": scanned_at,
+            "analysisMode": analysis_mode,
+            "advisory": advisory,
         }
     )
 
@@ -840,7 +1190,7 @@ def orders_selling(request: HttpRequest):
         return method_not_allowed(["GET"])
     rows, _ = request.supabase.select(
         "orders",
-        filters={"farmer_id": f"eq.{request.user_id}", "payment_status": "neq.failed"},
+        filters={"farmer_id": f"eq.{request.user_id}"},
         order="created_at.desc",
     )
     return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
@@ -853,7 +1203,7 @@ def orders_buying(request: HttpRequest):
         return method_not_allowed(["GET"])
     rows, _ = request.supabase.select(
         "orders",
-        filters={"buyer_id": f"eq.{request.user_id}", "payment_status": "neq.failed"},
+        filters={"buyer_id": f"eq.{request.user_id}"},
         order="created_at.desc",
     )
     return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
@@ -869,21 +1219,42 @@ def orders_root(request: HttpRequest):
         quantity = float(body.get("quantity"))
     except (TypeError, ValueError):
         raise ApiException("Quantity must be greater than 0", 400)
-    delivery_fee = float(body.get("delivery_fee", 50))
-    if not body.get("product_id"):
+    product_id = str(body.get("product_id") or "").strip()
+    if not product_id:
         raise ApiException("Product is required", 400)
     if quantity <= 0:
         raise ApiException("Quantity must be greater than 0", 400)
-    if delivery_fee < 0:
-        raise ApiException("Delivery fee must be 0 or more", 400)
+    provided_distance_km = _parse_optional_distance_km(body.get("delivery_distance_km"))
+
+    product, _ = request.supabase.select(
+        "products",
+        select="id, farmer_id, unit, stock, is_available",
+        filters={"id": f"eq.{product_id}"},
+        single=True,
+    )
+    if not product:
+        raise ApiException("Product not found", 404)
+    if product.get("farmer_id") == request.user_id:
+        raise ApiException("You cannot place an order for your own product", 400)
+
+    buyer_county, seller_county = _resolve_buyer_farmer_counties(
+        request.supabase,
+        request.user_id,
+        str(product.get("farmer_id") or ""),
+    )
+    delivery_quote = _build_delivery_quote(provided_distance_km, buyer_county, seller_county)
+    pickup_county = _clean_optional_text(body.get("pickup_county")) or delivery_quote.get("pickup_county")
+
     result = request.supabase.rpc(
-        "place_marketplace_order",
+        "place_marketplace_order_v2",
         {
-            "p_product_id": body.get("product_id"),
+            "p_product_id": product_id,
             "p_quantity": quantity,
-            "p_unit": body.get("unit"),
-            "p_delivery_fee": delivery_fee,
+            "p_unit": body.get("unit") or product.get("unit"),
+            "p_delivery_fee": delivery_quote["fee_kes"],
             "p_notes": str(body.get("notes") or "").strip() or None,
+            "p_delivery_distance_km": delivery_quote["distance_km"],
+            "p_pickup_county": pickup_county,
         },
     )
     rows = result if isinstance(result, list) else [result] if result else []
@@ -896,7 +1267,7 @@ def order_status(request: HttpRequest, order_id: str):
     if request.method != "PATCH":
         return method_not_allowed(["PATCH"])
     status = parse_json_body(request).get("status")
-    if status not in {"pending", "confirmed", "processing", "shipped", "delivered", "cancelled"}:
+    if status not in ORDER_STATUS_VALUES:
         raise ApiException("Invalid status value", 400)
     existing, _ = request.supabase.select(
         "orders",
@@ -905,16 +1276,413 @@ def order_status(request: HttpRequest, order_id: str):
     )
     if not existing:
         raise ApiException("Order not found", 404)
-    allowed = get_allowed_statuses(existing["status"], existing["farmer_id"] == request.user_id)
+    allowed = get_allowed_statuses(existing["status"], existing["farmer_id"] == request.user_id, str(existing.get("payment_status") or "unpaid"))
     if status not in allowed:
         raise ApiException(f"You cannot change an order from {existing['status']} to {status}.", 400)
-    updates: dict[str, Any] = {"status": status}
-    if status == "delivered" and existing.get("payment_status") == "paid":
-        updates["payout_status"] = "awaiting_official_signoff"
-    elif status == "cancelled":
-        updates["payout_status"] = "cancelled"
+    if status == "cancelled" and existing.get("status") != "cancelled":
+        _restock_cancelled_order_item(request.supabase, existing)
+    next_payment_status = str(existing.get("payment_status") or "unpaid")
+    updates: dict[str, Any] = {
+        "status": status,
+        "payout_status": _derive_payout_status(status, next_payment_status),
+    }
     updated = request.supabase.update("orders", updates, filters={"id": f"eq.{order_id}"}, single=True)
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
+
+
+@api_view
+@require_auth
+def order_delivery_proof(request: HttpRequest, order_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "farmer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") == "cancelled":
+        raise ApiException("Cancelled orders cannot accept delivery proof.", 400)
+    if order.get("status") not in {"processing", "shipped", "delivered"}:
+        raise ApiException("Delivery proof can only be submitted for active delivery orders.", 400)
+
+    body = parse_json_body(request)
+    proof_photo_url = _clean_optional_text(body.get("proof_photo_url") or body.get("photo_url"))
+    if not proof_photo_url:
+        raise ApiException("Delivery proof photo URL is required.", 400)
+    proof_geo_lat = _parse_optional_coordinate(body.get("proof_geo_lat") or body.get("gps_lat"), "Delivery proof latitude", -90, 90)
+    proof_geo_lng = _parse_optional_coordinate(body.get("proof_geo_lng") or body.get("gps_lng"), "Delivery proof longitude", -180, 180)
+    proof_note = _clean_optional_text(body.get("proof_note") or body.get("note"))
+
+    current_signoff_status = _normalize_delivery_signoff_status(order.get("delivery_signoff_status"), "pending_proof")
+    next_signoff_status = "pending_buyer_confirmation" if current_signoff_status == "pending_proof" else current_signoff_status
+    now_label = now_iso()
+    updated = request.supabase.update(
+        "orders",
+        {
+            "delivery_proof_photo_url": proof_photo_url,
+            "delivery_proof_geo_lat": proof_geo_lat,
+            "delivery_proof_geo_lng": proof_geo_lng,
+            "delivery_proof_submitted_at": now_label,
+            "delivery_proof_submitted_by": request.user_id,
+            "delivery_proof_note": proof_note,
+            "delivery_signoff_status": next_signoff_status,
+            "dispute_deadline_at": None if next_signoff_status == "pending_buyer_confirmation" else order.get("dispute_deadline_at"),
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+    return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
+
+
+@api_view
+@require_auth
+def order_delivery_otp_request(request: HttpRequest, order_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "farmer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") != "delivered":
+        raise ApiException("Mark the order as delivered before requesting buyer OTP.", 400)
+    if not _clean_optional_text(order.get("delivery_proof_photo_url")):
+        raise ApiException("Submit delivery proof first before requesting buyer OTP.", 400)
+    if order.get("payout_status") == "released":
+        raise ApiException("Payout is already released for this order.", 400)
+
+    otp_code = _generate_delivery_otp_code()
+    now_dt = datetime.utcnow().replace(microsecond=0)
+    now_label = now_dt.isoformat() + "Z"
+    expires_at = (now_dt + timedelta(minutes=DELIVERY_OTP_TTL_MINUTES)).isoformat() + "Z"
+    updated = request.supabase.update(
+        "orders",
+        {
+            "buyer_delivery_otp_hash": _hash_delivery_otp(order_id, otp_code),
+            "buyer_delivery_otp_requested_at": now_label,
+            "buyer_delivery_otp_expires_at": expires_at,
+            "buyer_delivery_otp_verified_at": None,
+            "buyer_delivery_otp_attempts": 0,
+            "delivery_signoff_status": "pending_buyer_confirmation",
+            "dispute_deadline_at": None,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+    return JsonResponse(
+        {
+            "message": "Buyer delivery OTP created.",
+            "otp_code": otp_code,
+            "otp_expires_at": expires_at,
+            "order": attach_order_meta(request.supabase, [updated])[0],
+        }
+    )
+
+
+@api_view
+@require_auth
+def order_delivery_otp_verify(request: HttpRequest, order_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "buyer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") != "delivered":
+        raise ApiException("Only delivered orders can be buyer-confirmed.", 400)
+    if order.get("payout_status") == "released":
+        raise ApiException("Payout was already released for this order.", 400)
+
+    body = parse_json_body(request)
+    otp_code = str(body.get("otp_code") or body.get("otp") or "").strip()
+    if not otp_code:
+        raise ApiException("OTP code is required.", 400)
+
+    now_dt = datetime.utcnow().replace(microsecond=0)
+    now_label = now_dt.isoformat() + "Z"
+    stored_hash = str(order.get("buyer_delivery_otp_hash") or "").strip()
+    expires_at = _parse_iso_datetime(order.get("buyer_delivery_otp_expires_at"))
+    if not stored_hash:
+        raise ApiException("No active OTP found for this order.", 400)
+    if expires_at and now_dt > expires_at:
+        raise ApiException("Delivery OTP has expired. Request a new OTP code.", 400)
+
+    expected_hash = _hash_delivery_otp(order_id, otp_code)
+    if expected_hash != stored_hash:
+        attempts = int(order.get("buyer_delivery_otp_attempts") or 0) + 1
+        remaining = max(DELIVERY_OTP_MAX_ATTEMPTS - attempts, 0)
+        updates: dict[str, Any] = {"buyer_delivery_otp_attempts": attempts}
+        if attempts >= DELIVERY_OTP_MAX_ATTEMPTS:
+            updates.update(
+                {
+                    "delivery_signoff_status": "disputed",
+                    "dispute_reason": "Maximum OTP attempts reached. Admin review required.",
+                    "dispute_opened_at": now_label,
+                    "dispute_opened_by": request.user_id,
+                    "dispute_resolved_at": None,
+                    "dispute_resolution_note": None,
+                }
+            )
+        request.supabase.update("orders", updates, filters={"id": f"eq.{order_id}"})
+        if remaining == 0:
+            raise ApiException("OTP attempts exceeded. Order has been flagged for admin review.", 400)
+        raise ApiException(f"Invalid OTP code. {remaining} attempts remaining.", 400)
+
+    dispute_deadline_at = (now_dt + timedelta(hours=DELIVERY_DISPUTE_WINDOW_HOURS)).isoformat() + "Z"
+    updated = request.supabase.update(
+        "orders",
+        {
+            "buyer_delivery_otp_hash": None,
+            "buyer_delivery_otp_verified_at": now_label,
+            "buyer_delivery_otp_attempts": 0,
+            "delivery_signoff_status": "confirmed",
+            "dispute_reason": None,
+            "dispute_opened_at": None,
+            "dispute_opened_by": None,
+            "dispute_resolved_at": None,
+            "dispute_resolution_note": None,
+            "dispute_deadline_at": dispute_deadline_at,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+    return JsonResponse(
+        {
+            "message": f"Delivery confirmed. Dispute window ends at {dispute_deadline_at}.",
+            "order": attach_order_meta(request.supabase, [updated])[0],
+        }
+    )
+
+
+@api_view
+@require_auth
+def order_raise_dispute(request: HttpRequest, order_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "buyer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") != "delivered":
+        raise ApiException("Only delivered orders can be disputed.", 400)
+    if order.get("payout_status") == "released":
+        raise ApiException("Payout was already released; this order can no longer be disputed.", 400)
+
+    reason = _clean_optional_text(parse_json_body(request).get("reason"))
+    if not reason:
+        raise ApiException("Dispute reason is required.", 400)
+
+    now_label = now_iso()
+    updated = request.supabase.update(
+        "orders",
+        {
+            "delivery_signoff_status": "disputed",
+            "dispute_reason": reason,
+            "dispute_opened_at": now_label,
+            "dispute_opened_by": request.user_id,
+            "dispute_resolved_at": None,
+            "dispute_resolution_note": None,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+    return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
+
+
+def attach_cart_meta(client, cart_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not cart_items:
+        return []
+
+    product_ids = sorted({item["product_id"] for item in cart_items if item.get("product_id")})
+    products, _ = client.select(
+        "products",
+        select="id, farmer_id, name, image_emoji, cover_image_url, category, unit, price_per_unit, stock, is_available",
+        filters={"id": f"in.{postgrest_in(product_ids)}"},
+    )
+    farmer_ids = sorted({item["farmer_id"] for item in products or [] if item.get("farmer_id")})
+    profiles = load_profiles_by_user_ids(client, farmer_ids, "user_id, full_name, county") if farmer_ids else {}
+    products_by_id = {row["id"]: row for row in products or []}
+
+    result = []
+    for item in cart_items:
+        product = products_by_id.get(item.get("product_id"))
+        farmer_profile = profiles.get(product.get("farmer_id")) if product else None
+        result.append(
+            {
+                **item,
+                "product": (
+                    {
+                        "id": product.get("id"),
+                        "name": product.get("name"),
+                        "category": product.get("category"),
+                        "unit": product.get("unit"),
+                        "price_per_unit": float(product.get("price_per_unit") or 0),
+                        "stock": float(product.get("stock") or 0),
+                        "is_available": bool(product.get("is_available")),
+                        "image_emoji": product.get("image_emoji"),
+                        "cover_image_url": product.get("cover_image_url"),
+                    }
+                    if product
+                    else None
+                ),
+                "farmer_profile": (
+                    {
+                        "full_name": farmer_profile.get("full_name"),
+                        "county": farmer_profile.get("county"),
+                    }
+                    if farmer_profile
+                    else None
+                ),
+            }
+        )
+    return result
+
+
+@api_view
+@require_auth
+def cart_root(request: HttpRequest):
+    if request.method == "GET":
+        rows, _ = request.supabase.select(
+            "cart_items",
+            filters={"buyer_id": f"eq.{request.user_id}"},
+            order="created_at.desc",
+        )
+        return JsonResponse(attach_cart_meta(request.supabase, rows or []), safe=False)
+
+    if request.method != "POST":
+        return method_not_allowed(["GET", "POST"])
+
+    body = parse_json_body(request)
+    product_id = str(body.get("product_id") or "").strip()
+    if not product_id:
+        raise ApiException("Product is required.", 400)
+    selected_for_checkout = body.get("selected_for_checkout")
+    if selected_for_checkout is not None and not isinstance(selected_for_checkout, bool):
+        raise ApiException("selected_for_checkout must be true or false.", 400)
+    try:
+        quantity = float(body.get("quantity"))
+    except (TypeError, ValueError):
+        raise ApiException("Quantity must be greater than 0.", 400)
+    if quantity <= 0:
+        raise ApiException("Quantity must be greater than 0.", 400)
+
+    product, _ = request.supabase.select(
+        "products",
+        select="id, farmer_id, unit, stock, is_available",
+        filters={"id": f"eq.{product_id}"},
+        single=True,
+    )
+    if not product:
+        raise ApiException("Product not found.", 404)
+    if product.get("farmer_id") == request.user_id:
+        raise ApiException("You cannot add your own product to cart.", 400)
+    if not bool(product.get("is_available")):
+        raise ApiException("This product is not currently available.", 400)
+    if float(product.get("stock") or 0) < quantity:
+        raise ApiException(f"Only {product.get('stock')} {product.get('unit')} currently available.", 400)
+
+    existing_item, _ = request.supabase.select(
+        "cart_items",
+        filters={"buyer_id": f"eq.{request.user_id}", "product_id": f"eq.{product_id}"},
+        single=True,
+    )
+    if existing_item:
+        next_quantity = round(float(existing_item.get("quantity") or 0) + quantity, 2)
+        if next_quantity > float(product.get("stock") or 0):
+            raise ApiException(f"Cart quantity exceeds available stock ({product.get('stock')} {product.get('unit')}).", 400)
+        updated = request.supabase.update(
+            "cart_items",
+            {
+                "quantity": next_quantity,
+                "unit": str(body.get("unit") or product.get("unit") or existing_item.get("unit") or "").strip() or product.get("unit"),
+                "notes": str(body.get("notes") or "").strip() or existing_item.get("notes"),
+                "selected_for_checkout": selected_for_checkout if selected_for_checkout is not None else existing_item.get("selected_for_checkout", True),
+            },
+            filters={"id": f"eq.{existing_item['id']}"},
+            single=True,
+        )
+        return JsonResponse(attach_cart_meta(request.supabase, [updated])[0])
+
+    created = request.supabase.insert(
+        "cart_items",
+        {
+            "buyer_id": request.user_id,
+            "product_id": product_id,
+            "quantity": quantity,
+            "unit": str(body.get("unit") or product.get("unit") or "").strip() or product.get("unit"),
+            "notes": str(body.get("notes") or "").strip() or None,
+            "selected_for_checkout": selected_for_checkout if selected_for_checkout is not None else True,
+        },
+        single=True,
+    )
+    return JsonResponse(attach_cart_meta(request.supabase, [created])[0], status=201)
+
+
+@api_view
+@require_auth
+def cart_item_detail(request: HttpRequest, item_id: str):
+    if request.method == "DELETE":
+        request.supabase.delete("cart_items", filters={"id": f"eq.{item_id}", "buyer_id": f"eq.{request.user_id}"})
+        return JsonResponse({"success": True})
+
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH", "DELETE"])
+
+    body = parse_json_body(request)
+    existing, _ = request.supabase.select(
+        "cart_items",
+        filters={"id": f"eq.{item_id}", "buyer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not existing:
+        raise ApiException("Cart item not found.", 404)
+
+    updates: dict[str, Any] = {}
+    if "quantity" in body:
+        try:
+            quantity = float(body.get("quantity"))
+        except (TypeError, ValueError):
+            raise ApiException("Quantity must be greater than 0.", 400)
+        if quantity <= 0:
+            raise ApiException("Quantity must be greater than 0.", 400)
+        product, _ = request.supabase.select(
+            "products",
+            select="stock, unit",
+            filters={"id": f"eq.{existing['product_id']}"},
+            single=True,
+        )
+        if product and quantity > float(product.get("stock") or 0):
+            raise ApiException(f"Only {product.get('stock')} {product.get('unit')} currently available.", 400)
+        updates["quantity"] = quantity
+
+    if "unit" in body:
+        updates["unit"] = str(body.get("unit") or "").strip() or existing.get("unit")
+    if "notes" in body:
+        updates["notes"] = str(body.get("notes") or "").strip() or None
+    if "selected_for_checkout" in body:
+        if not isinstance(body.get("selected_for_checkout"), bool):
+            raise ApiException("selected_for_checkout must be true or false.", 400)
+        updates["selected_for_checkout"] = bool(body.get("selected_for_checkout"))
+
+    if not updates:
+        return JsonResponse(attach_cart_meta(request.supabase, [existing])[0])
+
+    updated = request.supabase.update("cart_items", updates, filters={"id": f"eq.{item_id}"}, single=True)
+    return JsonResponse(attach_cart_meta(request.supabase, [updated])[0])
 
 
 @api_view
@@ -1030,6 +1798,8 @@ def profile_me_role(request: HttpRequest):
     next_role = parse_json_body(request).get("role")
     if next_role not in {"farmer_free", "farmer_pro", "company"}:
         raise ApiException("Invalid role", 400)
+    if next_role in PAID_PLAN_ROLES:
+        raise ApiException("Paid plans must be activated through /api/payments/subscriptions/mpesa after successful payment.", 402)
     try:
         fallback_full_name = request.auth_user.get("user_metadata", {}).get("full_name")
         updated_profile = set_user_role_with_plan(request.user_id, next_role, fallback_full_name)
@@ -1156,6 +1926,8 @@ def payment_mpesa(request: HttpRequest, order_id: str):
             "merchant_request_id": stk["MerchantRequestID"],
             "payment_ref": None,
             "payment_error": None,
+            "payment_verification_started_at": now_iso(),
+            "payment_verified_at": None,
         },
         filters={"id": f"eq.{order['id']}"},
     )
@@ -1185,11 +1957,185 @@ def payment_mpesa_status(request: HttpRequest, order_id: str):
     if payment_status == "paid":
         mark_order_paid(order["id"], order["checkout_request_id"], order.get("payment_ref"))
     elif payment_status == "failed":
-        request.supabase.update("orders", {"payment_status": "failed", "payment_error": result_desc}, filters={"id": f"eq.{order['id']}"})
+        request.supabase.update(
+            "orders",
+            {
+                "payment_status": "failed",
+                "payment_error": result_desc,
+                "payment_verification_started_at": order.get("payment_verification_started_at") or now_iso(),
+            },
+            filters={"id": f"eq.{order['id']}"},
+        )
     else:
-        request.supabase.update("orders", {"payment_status": "pending_confirmation", "payment_error": None}, filters={"id": f"eq.{order['id']}"})
+        request.supabase.update(
+            "orders",
+            {
+                "payment_status": "pending_confirmation",
+                "payment_error": None,
+                "payment_verification_started_at": order.get("payment_verification_started_at") or now_iso(),
+            },
+            filters={"id": f"eq.{order['id']}"},
+        )
 
     return JsonResponse({"payment_status": payment_status, "resultCode": result_code, "resultDesc": result_desc})
+
+
+@api_view
+@require_auth
+def payment_subscription_mpesa(request: HttpRequest):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+    body = parse_json_body(request)
+    plan_role = str(body.get("planRole") or body.get("role") or "").strip()
+    if plan_role not in PAID_PLAN_ROLES:
+        raise ApiException("Choose a valid paid plan role.", 400)
+
+    phone_number = normalize_kenyan_phone(str(body.get("phoneNumber") or ""))
+    amount_kes = _subscription_amount_kes(plan_role)
+    checkout_desc = f"AgriLink {SUBSCRIPTION_PLAN_DEFAULTS[plan_role]['display_name']} plan"
+
+    try:
+        stk = initiate_stk_push(phone_number, amount_kes, f"PLAN-{request.user_id[:8]}", checkout_desc)
+    except Exception:
+        if not mpesa_mock_enabled():
+            raise
+        now_tag = int(datetime.utcnow().timestamp())
+        stk = {
+            "CheckoutRequestID": f"mock-plan-checkout-{request.user_id[:8]}-{now_tag}",
+            "MerchantRequestID": f"mock-plan-merchant-{request.user_id[:8]}-{now_tag}",
+            "CustomerMessage": "Sandbox mock subscription payment started. Use Check M-Pesa to confirm.",
+            "ResponseDescription": "Sandbox mock subscription payment started",
+        }
+
+    created = request.supabase.insert(
+        "subscription_payments",
+        {
+            "user_id": request.user_id,
+            "plan_role": plan_role,
+            "amount_kes": amount_kes,
+            "currency": "KES",
+            "payment_method": "mpesa",
+            "payment_status": "initiated",
+            "checkout_request_id": stk.get("CheckoutRequestID"),
+            "merchant_request_id": stk.get("MerchantRequestID"),
+            "payment_ref": None,
+            "payment_error": None,
+        },
+        single=True,
+    )
+    return JsonResponse(
+        {
+            "message": stk.get("CustomerMessage") or stk.get("ResponseDescription"),
+            "payment": created,
+        },
+        status=201,
+    )
+
+
+@api_view
+@require_auth
+def payment_subscription_mpesa_status(request: HttpRequest, payment_id: str):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+
+    payment, _ = request.supabase.select(
+        "subscription_payments",
+        filters={"id": f"eq.{payment_id}", "user_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not payment:
+        raise ApiException("Subscription payment not found.", 404)
+
+    current_status = str(payment.get("payment_status") or "initiated")
+    if current_status == "paid":
+        profile, _ = request.supabase.select("profiles", filters={"user_id": f"eq.{request.user_id}"}, single=True)
+        return JsonResponse(
+            {
+                "payment_status": "paid",
+                "resultCode": "0",
+                "resultDesc": "Subscription payment already confirmed.",
+                "payment": payment,
+                "role": payment.get("plan_role"),
+                "profile": profile,
+            }
+        )
+
+    checkout_request_id = payment.get("checkout_request_id")
+    if not checkout_request_id:
+        raise ApiException("No M-Pesa request found for this subscription payment.", 400)
+
+    try:
+        result = query_stk_push(str(checkout_request_id))
+    except Exception:
+        if not mpesa_mock_enabled():
+            raise
+        result = {
+            "ResultCode": "0",
+            "ResultDesc": "Sandbox mock subscription payment confirmed",
+            "ResponseDescription": "Sandbox mock subscription payment confirmed",
+            "MpesaReceiptNumber": f"MOCK-{str(payment_id)[:8]}",
+        }
+
+    payment_status, result_code, result_desc = resolve_mpesa_payment_state(result)
+    admin = admin_client()
+    if payment_status == "paid":
+        receipt_number = _extract_mpesa_receipt_number(result)
+        fallback_full_name = request.auth_user.get("user_metadata", {}).get("full_name")
+        updated_payment, updated_profile = _activate_paid_subscription(
+            str(payment["id"]),
+            request.user_id,
+            str(payment["plan_role"]),
+            str(checkout_request_id),
+            receipt_number,
+            fallback_full_name,
+        )
+        return JsonResponse(
+            {
+                "payment_status": "paid",
+                "resultCode": result_code,
+                "resultDesc": result_desc,
+                "payment": updated_payment,
+                "role": payment.get("plan_role"),
+                "profile": updated_profile,
+            }
+        )
+
+    if payment_status == "failed":
+        updated_payment = admin.update(
+            "subscription_payments",
+            {
+                "payment_status": "failed",
+                "payment_error": result_desc,
+            },
+            filters={"id": f"eq.{payment_id}"},
+            single=True,
+        )
+        return JsonResponse(
+            {
+                "payment_status": "failed",
+                "resultCode": result_code,
+                "resultDesc": result_desc,
+                "payment": updated_payment,
+            }
+        )
+
+    updated_payment = admin.update(
+        "subscription_payments",
+        {
+            "payment_status": "pending_confirmation",
+            "payment_error": None,
+        },
+        filters={"id": f"eq.{payment_id}"},
+        single=True,
+    )
+    return JsonResponse(
+        {
+            "payment_status": "pending_confirmation",
+            "resultCode": result_code,
+            "resultDesc": result_desc,
+            "payment": updated_payment,
+        }
+    )
 
 
 @api_view
@@ -1201,19 +2147,39 @@ def payment_mpesa_callback(request: HttpRequest):
     checkout_request_id = callback.get("CheckoutRequestID")
     if not checkout_request_id:
         return JsonResponse({"ok": True})
-    receipt_number = None
-    metadata = (((callback.get("CallbackMetadata") or {}).get("Item")) if isinstance(callback.get("CallbackMetadata"), dict) else []) or []
-    for item in metadata:
-        if item.get("Name") == "MpesaReceiptNumber":
-            receipt_number = str(item.get("Value"))
+    receipt_number = _extract_mpesa_receipt_number(callback)
     admin = admin_client()
     payment_status, _, resolved_desc = resolve_mpesa_payment_state(callback)
     if payment_status == "paid":
         order, _ = admin.select("orders", select="id", filters={"checkout_request_id": f"eq.{checkout_request_id}"}, single=True)
         if order:
             mark_order_paid(order["id"], checkout_request_id, receipt_number)
+        subscription_payment, _ = admin.select(
+            "subscription_payments",
+            select="id, user_id, plan_role, checkout_request_id",
+            filters={"checkout_request_id": f"eq.{checkout_request_id}"},
+            single=True,
+        )
+        if subscription_payment and str(subscription_payment.get("plan_role") or "") in PAID_PLAN_ROLES:
+            _activate_paid_subscription(
+                str(subscription_payment["id"]),
+                str(subscription_payment["user_id"]),
+                str(subscription_payment["plan_role"]),
+                str(subscription_payment.get("checkout_request_id") or checkout_request_id),
+                receipt_number,
+            )
     elif payment_status == "failed":
         admin.update("orders", {"payment_status": "failed", "payment_error": resolved_desc}, filters={"checkout_request_id": f"eq.{checkout_request_id}"})
+        admin.update(
+            "subscription_payments",
+            {"payment_status": "failed", "payment_error": resolved_desc},
+            filters={"checkout_request_id": f"eq.{checkout_request_id}"},
+        )
     else:
         admin.update("orders", {"payment_status": "pending_confirmation", "payment_error": None}, filters={"checkout_request_id": f"eq.{checkout_request_id}"})
+        admin.update(
+            "subscription_payments",
+            {"payment_status": "pending_confirmation", "payment_error": None},
+            filters={"checkout_request_id": f"eq.{checkout_request_id}"},
+        )
     return JsonResponse({"ok": True})

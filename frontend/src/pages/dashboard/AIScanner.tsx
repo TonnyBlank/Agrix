@@ -34,6 +34,7 @@ type ScanHistoryItem = {
 };
 
 type ScanResponse = {
+  scanId?: string;
   result: ScanResult;
   scannedAt: string;
   analysisMode: string;
@@ -325,7 +326,7 @@ function ScannerLab() {
       setScanMeta({ analysisMode: response.analysisMode, advisory: response.advisory });
       setRecentScans((current) => [
         {
-          id: crypto.randomUUID(),
+          id: response.scanId || crypto.randomUUID(),
           disease: response.result.disease,
           crop: response.result.crop,
           severity: response.result.severity,

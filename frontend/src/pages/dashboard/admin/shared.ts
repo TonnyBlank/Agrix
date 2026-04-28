@@ -7,6 +7,7 @@ export type LoanRole = "farmer_pro" | "company";
 export type LoanProductType = "seasonal_working_capital" | "equipment_top_up" | "buyer_contract_financing";
 export type LoanSecurityType = "unsecured" | "guarantor" | "collateral";
 export type BranchVisitStatus = "not_required" | "pending_customer_visit" | "documents_received" | "valuation_pending" | "verified" | "waived";
+export type DeliverySignoffStatus = "pending_proof" | "pending_buyer_confirmation" | "confirmed" | "disputed" | "waived_by_admin";
 export type AdminTone = "sky" | "emerald" | "amber" | "violet" | "rose" | "slate";
 
 export type AdminCollateralItem = {
@@ -38,6 +39,129 @@ export type AdminUser = {
   created_at: string;
   email: string | null;
   role: AppRole;
+};
+
+export type AdminUserSummary = {
+  user: {
+    user_id: string;
+    email: string | null;
+    phone: string | null;
+    email_confirmed_at: string | null;
+    phone_confirmed_at: string | null;
+    last_sign_in_at: string | null;
+    created_at: string | null;
+    role: AppRole;
+    roles: AppRole[];
+  };
+  profile: {
+    user_id: string;
+    full_name: string | null;
+    phone: string | null;
+    county: string | null;
+    bio: string | null;
+    farm_size: string | null;
+    main_crops: string[] | null;
+    farm_type: string | null;
+    irrigation_type: string | null;
+    soil_type: string | null;
+    years_farming: number | null;
+    has_storage: boolean | null;
+    has_transport: boolean | null;
+    cooperative_name: string | null;
+    farm_gps_lat: number | null;
+    farm_gps_lng: number | null;
+    photo_url: string | null;
+    payout_method: string | null;
+    payout_mpesa_number: string | null;
+    bank_name: string | null;
+    bank_account_name: string | null;
+    bank_account_number: string | null;
+    plan_started_at: string | null;
+    plan_expires_at: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null;
+  id_verification: {
+    id: string;
+    status: string;
+    reviewer_note: string | null;
+    submitted_at: string | null;
+    reviewed_at: string | null;
+    front_doc_url: string | null;
+    back_doc_url: string | null;
+    doc_url: string | null;
+    created_at: string | null;
+  } | null;
+  company: {
+    id: string;
+    company_name: string | null;
+    company_type: string | null;
+    verification_status: string | null;
+    verified: boolean | null;
+    phone: string | null;
+    email: string | null;
+    website: string | null;
+    headquarters_location: string | null;
+    service_areas: string[] | null;
+    created_at: string | null;
+    updated_at: string | null;
+  } | null;
+  stats: {
+    products_count: number;
+    selling_orders_count: number;
+    buying_orders_count: number;
+    loan_applications_count: number;
+    loan_repayments_count: number;
+    crop_events_count: number;
+    conversations_count: number;
+  };
+  recent: {
+    products: Array<{
+      id: string;
+      name: string;
+      category: string | null;
+      price_per_unit: number;
+      unit: string | null;
+      stock: number;
+      is_available: boolean | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+    selling_orders: AdminOrder[];
+    buying_orders: AdminOrder[];
+    loan_applications: Array<{
+      id: string;
+      applicant_role: string;
+      product_title: string;
+      requested_amount: number;
+      approved_amount: number | null;
+      status: string;
+      security_type: string | null;
+      requires_branch_visit: boolean | null;
+      branch_visit_status: string | null;
+      target_county: string | null;
+      created_at: string;
+      updated_at: string;
+    }>;
+    loan_repayments: Array<{
+      id: string;
+      loan_application_id: string;
+      amount: number;
+      payment_method: string | null;
+      payment_ref: string | null;
+      created_at: string;
+    }>;
+    crop_events: Array<{
+      id: string;
+      title: string;
+      crop: string;
+      type: string;
+      event_date: string;
+      done: boolean;
+      created_at: string;
+      updated_at: string;
+    }>;
+  };
 };
 
 export type AdminLoan = {
@@ -107,15 +231,39 @@ export type AdminOrder = {
   status?: string;
   total_price: number;
   delivery_fee?: number | null;
+  delivery_distance_km?: number | null;
+  delivery_mode?: string | null;
+  pickup_county?: string | null;
+  pickup_office_label?: string | null;
+  delivery_disclaimer?: string | null;
   payment_status: string;
   payment_ref?: string | null;
   paid_at?: string | null;
+  payment_verification_started_at?: string | null;
+  payment_verified_at?: string | null;
   escrow_amount?: number | null;
   agrilink_commission_rate?: number | null;
   agrilink_commission_amount?: number | null;
   seller_payout_amount?: number | null;
   payout_status?: string | null;
   escrow_received_at?: string | null;
+  delivery_proof_photo_url?: string | null;
+  delivery_proof_geo_lat?: number | null;
+  delivery_proof_geo_lng?: number | null;
+  delivery_proof_submitted_at?: string | null;
+  delivery_proof_submitted_by?: string | null;
+  delivery_proof_note?: string | null;
+  buyer_delivery_otp_requested_at?: string | null;
+  buyer_delivery_otp_expires_at?: string | null;
+  buyer_delivery_otp_verified_at?: string | null;
+  buyer_delivery_otp_attempts?: number | null;
+  delivery_signoff_status?: DeliverySignoffStatus | string | null;
+  dispute_reason?: string | null;
+  dispute_opened_at?: string | null;
+  dispute_opened_by?: string | null;
+  dispute_resolved_at?: string | null;
+  dispute_resolution_note?: string | null;
+  dispute_deadline_at?: string | null;
   official_verified_at?: string | null;
   official_verified_by?: string | null;
   official_note?: string | null;

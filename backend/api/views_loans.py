@@ -142,6 +142,27 @@ def normalize_collateral_items(value: Any) -> list[dict[str, Any]]:
     return cleaned
 
 
+def normalize_guarantors(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for item in value:
+        normalized: dict[str, Any] = {}
+        if isinstance(item, dict):
+            for raw_key, raw_value in item.items():
+                key = str(raw_key or "").strip()
+                text = str(raw_value or "").strip()
+                if key and text:
+                    normalized[key] = text
+        else:
+            text = str(item or "").strip()
+            if text:
+                normalized["name"] = text
+        if normalized:
+            cleaned.append(normalized)
+    return cleaned
+
+
 def serialize_loan_offer(offer: dict[str, Any], available_amount: float, eligibility: dict[str, Any], outstanding: float) -> dict[str, Any]:
     max_amount = float(offer.get("max_amount") or 0)
     requires_branch_visit = bool(offer.get("requires_branch_visit"))
@@ -342,6 +363,7 @@ def micro_loan_applications(request: HttpRequest):
         raise ApiException("Requested amount must be a valid number.", 400)
     if requested_amount <= 0:
         raise ApiException("Requested amount must be greater than zero.", 400)
+    requested_amount = round(requested_amount, 2)
     profile, _ = request.supabase.select(
         "profiles",
         select="full_name, phone, county, payout_method, payout_mpesa_number, bank_name, bank_account_name, bank_account_number",
@@ -421,9 +443,7 @@ def micro_loan_applications(request: HttpRequest):
     if requested_amount > max_allowed:
         raise ApiException(f"Requested amount exceeds your current limit for {product_title}.", 400)
     approved_amount = round(requested_amount / 100) * 100
-    guarantors = body.get("guarantors")
-    if not isinstance(guarantors, list):
-        guarantors = []
+    guarantors = normalize_guarantors(body.get("guarantors"))
     collateral_items = normalize_collateral_items(body.get("collateralItems"))
     branch_visit_acknowledged = bool(body.get("branchVisitAcknowledged"))
     manual_review_required = loan_requires_manual_review(security_type, requires_branch_visit)
@@ -467,7 +487,7 @@ def micro_loan_applications(request: HttpRequest):
             "applicant_role": role,
             "product_type": selected_product_type,
             "product_title": product_title,
-            "requested_amount": approved_amount,
+            "requested_amount": requested_amount,
             "approved_amount": approved_amount,
             "speed": speed,
             "interest_rate": interest_rate,
@@ -509,7 +529,6 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         raise ApiException("Repayment amount must be greater than zero.", 400)
     if amount <= 0:
         raise ApiException("Repayment amount must be greater than zero.", 400)
-    phone_number = normalize_kenyan_phone(str(body.get("phoneNumber") or ""))
     loan, _ = request.supabase.select("micro_loan_applications", filters={"id": f"eq.{loan_id}", "user_id": f"eq.{request.user_id}"}, single=True)
     if not loan:
         raise ApiException("Loan application not found.", 404)
@@ -537,16 +556,34 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         raise ApiException("This loan is already fully repaid.", 400)
     if amount > schedule["summary"]["remainingBalance"]:
         raise ApiException(f"Repayment exceeds the current balance of KES {schedule['summary']['remainingBalance']:.2f}.", 400)
+
+    loan_repayment_method = str(loan.get("repayment_method") or "mpesa").strip().lower()
+    if loan_repayment_method not in {"mpesa", "pay_with_produce"}:
+        loan_repayment_method = "mpesa"
+    requested_payment_method = str(body.get("paymentMethod") or "").strip().lower()
+    payment_method = requested_payment_method if requested_payment_method in {"mpesa", "pay_with_produce"} else loan_repayment_method
+    if payment_method != loan_repayment_method:
+        expected = "Pay with Produce" if loan_repayment_method == "pay_with_produce" else "M-Pesa"
+        raise ApiException(f"This loan is configured for {expected} repayments.", 400)
+
+    phone_number = normalize_kenyan_phone(str(body.get("phoneNumber") or "")) if payment_method == "mpesa" else None
+    payment_ref_prefix = "LN" if payment_method == "mpesa" else "PWP"
+    repayment_note = (
+        f"M-Pesa repayment posted to {loan['product_title']}."
+        if payment_method == "mpesa"
+        else f"Pay with Produce repayment allocation posted to {loan['product_title']}."
+    )
+
     repayment = request.supabase.insert(
         "micro_loan_repayments",
         {
             "loan_application_id": loan_id,
             "user_id": request.user_id,
             "amount": amount,
-            "payment_method": "mpesa",
-            "payment_ref": f"LN-{int(datetime.utcnow().timestamp())}",
+            "payment_method": payment_method,
+            "payment_ref": f"{payment_ref_prefix}-{int(datetime.utcnow().timestamp())}",
             "phone_number": phone_number,
-            "note": f"M-Pesa repayment posted to {loan['product_title']}.",
+            "note": repayment_note,
         },
         single=True,
     )
@@ -570,4 +607,11 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         filters={"id": f"eq.{loan_id}"},
         single=True,
     )
-    return JsonResponse({"message": f"Repayment of KES {amount:.2f} received successfully.", "repayment": repayment, "loan": serialize_loan_application(updated, [*(repayments or []), repayment])})
+    success_label = "M-Pesa" if payment_method == "mpesa" else "Pay with Produce"
+    return JsonResponse(
+        {
+            "message": f"{success_label} repayment of KES {amount:.2f} received successfully.",
+            "repayment": repayment,
+            "loan": serialize_loan_application(updated, [*(repayments or []), repayment]),
+        }
+    )

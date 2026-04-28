@@ -48,6 +48,11 @@ def ensure_admin(request: HttpRequest):
         raise ApiException("Admin access required.", 403)
 
 
+def admin_count_rows(admin, table: str, filters: dict[str, str] | None = None) -> int:
+    _, count = admin.select(table, select="id", filters=filters or {}, head=True, count="exact")
+    return int(count or 0)
+
+
 @api_view
 @require_auth
 def admin_overview(request: HttpRequest):
@@ -144,6 +149,148 @@ def admin_users(request: HttpRequest):
 
 @api_view
 @require_auth
+def admin_user_summary(request: HttpRequest, user_id: str):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    ensure_admin(request)
+    admin = admin_client()
+
+    profile, _ = admin.select(
+        "profiles",
+        select=(
+            "user_id, full_name, phone, county, bio, farm_size, main_crops, farm_type, irrigation_type, soil_type, "
+            "years_farming, has_storage, has_transport, cooperative_name, farm_gps_lat, farm_gps_lng, photo_url, "
+            "payout_method, payout_mpesa_number, bank_name, bank_account_name, bank_account_number, "
+            "plan_started_at, plan_expires_at, created_at, updated_at"
+        ),
+        filters={"user_id": f"eq.{user_id}"},
+        single=True,
+    )
+
+    role_rows, _ = admin.select("user_roles", select="role", filters={"user_id": f"eq.{user_id}"})
+    roles = sorted({str(row.get("role") or "farmer_free") for row in role_rows or []})
+    role_priority = {
+        "admin": 1,
+        "company": 2,
+        "farmer_pro": 3,
+        "farmer_free": 4,
+    }
+    primary_role = sorted(roles, key=lambda item: role_priority.get(item, 99))[0] if roles else "farmer_free"
+
+    auth_user = admin.auth_admin_get_user(user_id) or {}
+    if not profile and not auth_user:
+        raise ApiException("User not found.", 404)
+
+    id_verification, _ = admin.select(
+        "id_verifications",
+        select="id, status, reviewer_note, submitted_at, reviewed_at, front_doc_url, back_doc_url, doc_url, created_at",
+        filters={"user_id": f"eq.{user_id}"},
+        single=True,
+    )
+
+    company, _ = admin.select(
+        "companies",
+        select=(
+            "id, company_name, company_type, verification_status, verified, phone, email, website, "
+            "headquarters_location, service_areas, created_at, updated_at"
+        ),
+        filters={"user_id": f"eq.{user_id}"},
+        single=True,
+    )
+
+    products_count = admin_count_rows(admin, "products", {"farmer_id": f"eq.{user_id}"})
+    selling_orders_count = admin_count_rows(admin, "orders", {"farmer_id": f"eq.{user_id}", "payment_status": "neq.failed"})
+    buying_orders_count = admin_count_rows(admin, "orders", {"buyer_id": f"eq.{user_id}", "payment_status": "neq.failed"})
+    loan_applications_count = admin_count_rows(admin, "micro_loan_applications", {"user_id": f"eq.{user_id}"})
+    loan_repayments_count = admin_count_rows(admin, "micro_loan_repayments", {"user_id": f"eq.{user_id}"})
+    crop_events_count = admin_count_rows(admin, "crop_events", {"farmer_id": f"eq.{user_id}"})
+    conversations_count = admin_count_rows(admin, "conversations", {"or": f"(participant_a.eq.{user_id},participant_b.eq.{user_id})"})
+
+    products, _ = admin.select(
+        "products",
+        select="id, name, category, price_per_unit, unit, stock, is_available, created_at, updated_at",
+        filters={"farmer_id": f"eq.{user_id}"},
+        order="updated_at.desc",
+        limit=6,
+    )
+    selling_orders, _ = admin.select(
+        "orders",
+        select="id, product_id, buyer_id, farmer_id, total_price, delivery_fee, status, payment_status, created_at, updated_at",
+        filters={"farmer_id": f"eq.{user_id}", "payment_status": "neq.failed"},
+        order="created_at.desc",
+        limit=6,
+    )
+    buying_orders, _ = admin.select(
+        "orders",
+        select="id, product_id, buyer_id, farmer_id, total_price, delivery_fee, status, payment_status, created_at, updated_at",
+        filters={"buyer_id": f"eq.{user_id}", "payment_status": "neq.failed"},
+        order="created_at.desc",
+        limit=6,
+    )
+    loan_applications, _ = admin.select(
+        "micro_loan_applications",
+        select=(
+            "id, applicant_role, product_title, requested_amount, approved_amount, status, "
+            "security_type, requires_branch_visit, branch_visit_status, target_county, created_at, updated_at"
+        ),
+        filters={"user_id": f"eq.{user_id}"},
+        order="created_at.desc",
+        limit=6,
+    )
+    loan_repayments, _ = admin.select(
+        "micro_loan_repayments",
+        select="id, loan_application_id, amount, payment_method, payment_ref, created_at",
+        filters={"user_id": f"eq.{user_id}"},
+        order="created_at.desc",
+        limit=6,
+    )
+    crop_events, _ = admin.select(
+        "crop_events",
+        select="id, title, crop, type, event_date, done, created_at, updated_at",
+        filters={"farmer_id": f"eq.{user_id}"},
+        order="event_date.desc",
+        limit=6,
+    )
+
+    return JsonResponse(
+        {
+            "user": {
+                "user_id": user_id,
+                "email": auth_user.get("email"),
+                "phone": auth_user.get("phone"),
+                "email_confirmed_at": auth_user.get("email_confirmed_at"),
+                "phone_confirmed_at": auth_user.get("phone_confirmed_at"),
+                "last_sign_in_at": auth_user.get("last_sign_in_at"),
+                "created_at": (profile or {}).get("created_at"),
+                "role": primary_role,
+                "roles": roles,
+            },
+            "profile": profile,
+            "id_verification": id_verification,
+            "company": company,
+            "stats": {
+                "products_count": products_count,
+                "selling_orders_count": selling_orders_count,
+                "buying_orders_count": buying_orders_count,
+                "loan_applications_count": loan_applications_count,
+                "loan_repayments_count": loan_repayments_count,
+                "crop_events_count": crop_events_count,
+                "conversations_count": conversations_count,
+            },
+            "recent": {
+                "products": products or [],
+                "selling_orders": attach_order_meta(admin, selling_orders or []),
+                "buying_orders": attach_order_meta(admin, buying_orders or []),
+                "loan_applications": loan_applications or [],
+                "loan_repayments": loan_repayments or [],
+                "crop_events": crop_events or [],
+            },
+        }
+    )
+
+
+@api_view
+@require_auth
 def admin_user_role(request: HttpRequest, user_id: str):
     if request.method != "PATCH":
         return method_not_allowed(["PATCH"])
@@ -184,7 +331,15 @@ def admin_order_release(request: HttpRequest, order_id: str):
         raise ApiException("Order not found.", 404)
     body = parse_json_body(request)
     official_note = str(body.get("official_note") or "").strip() or None
-    released = release_order_payout(admin, order, request.user_id, official_note)
+    override_reason = str(body.get("override_reason") or "").strip() or None
+    released = release_order_payout(
+        admin,
+        order,
+        request.user_id,
+        official_note,
+        allow_admin_override=True,
+        override_reason=override_reason,
+    )
     return JsonResponse(attach_order_meta(admin, [released])[0])
 
 
@@ -205,12 +360,16 @@ def admin_order_confirm_delivery(request: HttpRequest, order_id: str):
 
     body = parse_json_body(request)
     official_note = str(body.get("official_note") or "").strip() or "Official AgriLink delivery sign-off completed."
+    proof_exists = bool(str(order.get("delivery_proof_photo_url") or "").strip())
+    signoff_status = "pending_buyer_confirmation" if proof_exists else "pending_proof"
 
     updated = admin.update(
         "orders",
         {
             "status": "delivered",
             "payout_status": "awaiting_official_signoff" if order.get("payment_status") == "paid" else order.get("payout_status") or "pending_payment",
+            "delivery_signoff_status": signoff_status,
+            "dispute_deadline_at": None,
             "official_verified_at": order.get("official_verified_at") or now_iso(),
             "official_verified_by": order.get("official_verified_by") or request.user_id,
             "official_note": official_note,
@@ -219,8 +378,63 @@ def admin_order_confirm_delivery(request: HttpRequest, order_id: str):
         single=True,
     )
 
-    if updated.get("payment_status") == "paid":
-        updated = release_order_payout(admin, updated, request.user_id, official_note)
+    return JsonResponse(attach_order_meta(admin, [updated])[0])
+
+
+@api_view
+@require_auth
+def admin_order_resolve_dispute(request: HttpRequest, order_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+    ensure_admin(request)
+    admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") != "delivered":
+        raise ApiException("Only delivered orders can be dispute-resolved.", 400)
+    if order.get("payout_status") == "released":
+        raise ApiException("Payout is already released for this order.", 400)
+
+    body = parse_json_body(request)
+    resolution = str(body.get("resolution") or "confirm").strip().lower()
+    if resolution not in {"confirm", "waive"}:
+        raise ApiException("Resolution must be either confirm or waive.", 400)
+    resolution_note = clean_optional_text(body.get("resolution_note") or body.get("note"))
+    if not resolution_note:
+        raise ApiException("Provide a dispute resolution note.", 400)
+
+    now_label = now_iso()
+    next_signoff_status = "waived_by_admin" if resolution == "waive" else "confirmed"
+    next_official_note = str(order.get("official_note") or "").strip() or None
+    marker = f"Dispute resolution ({resolution}): {resolution_note}"
+    next_official_note = f"{next_official_note}\n{marker}".strip() if next_official_note else marker
+    updated = admin.update(
+        "orders",
+        {
+            "delivery_signoff_status": next_signoff_status,
+            "dispute_opened_at": None,
+            "dispute_opened_by": None,
+            "dispute_resolved_at": now_label,
+            "dispute_resolution_note": resolution_note,
+            "dispute_deadline_at": now_label if resolution == "waive" else order.get("dispute_deadline_at") or now_label,
+            "official_note": next_official_note,
+            "official_verified_at": order.get("official_verified_at") or now_label,
+            "official_verified_by": order.get("official_verified_by") or request.user_id,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+
+    if bool(body.get("release_now")):
+        updated = release_order_payout(
+            admin,
+            updated,
+            request.user_id,
+            next_official_note,
+            allow_admin_override=True,
+            override_reason=resolution_note if resolution == "waive" else None,
+        )
 
     return JsonResponse(attach_order_meta(admin, [updated])[0])
 

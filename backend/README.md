@@ -13,8 +13,10 @@ The backend is a Django application that preserves the REST API shape expected b
 
 - profile and auth-backed user data
 - marketplace and order APIs
+- cart APIs with stock-aware validation
 - micro-loans and repayment flows
 - M-Pesa sandbox or mock-backed payment flows
+- paid-plan subscription payment activation and ledger tracking
 - company APIs for:
   - company profile creation
   - company dashboard data
@@ -33,6 +35,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
+
+Before running APIs on a fresh Supabase project, run the root bootstrap SQL once:
+
+- `../setup_database.sql`
 
 ## Run Locally
 
@@ -58,12 +64,14 @@ http://127.0.0.1:3001/health
 - `/api/products`
 - `/api/scanner/crops`
 - `/api/orders`
+- `/api/cart`
 - `/api/messages`
 - `/api/crop-events`
 - `/api/profiles`
 - `/api/id-verification`
 - `/api/micro-loans`
 - `/api/payments`
+- `/api/payments/subscriptions`
 - `/api/companies`
 - `/api/farmer/companies`
 - `/api/admin`

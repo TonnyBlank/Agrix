@@ -209,6 +209,17 @@ class SupabaseClient:
         response.raise_for_status()
         return response.json().get("users", [])
 
+    def auth_admin_get_user(self, user_id: str) -> dict[str, Any] | None:
+        response = self.session.get(
+            urljoin(self.url, f"/auth/v1/admin/users/{user_id}"),
+            headers=self._headers(),
+            timeout=30,
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json().get("user")
+
     def rpc(self, name: str, payload: dict[str, Any]) -> Any:
         response = self.session.post(
             urljoin(self.url, f"/rest/v1/rpc/{name}"),
