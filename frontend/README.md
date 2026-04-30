@@ -114,6 +114,7 @@ npm run lint
 
 - The API helper targets the Django backend on port `3001` during local dev
 - Company pages expect the company schema and procurement schema to exist in Supabase
+- Procurement UI expects response statuses to stay in sync with backend/SQL: `submitted`, `accepted`, `rejected`, `withdrawn`
 - The `My Farm` page stores farm GPS coordinates in the user profile when available
 - The map view prefers saved GPS coordinates over plain county geocoding
 

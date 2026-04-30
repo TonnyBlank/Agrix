@@ -237,6 +237,10 @@ Current company capabilities include:
 - company product catalog management
 - supplier / farmer partnership tracking
 - procurement request publishing
+- procurement response review with accept/reject decisions
+- procurement offer intelligence (price ranking, budget-fit, market signal labels)
+- accepted procurement responses convert directly into marketplace orders
+- farmer offer lifecycle controls (submit, withdraw, resubmit)
 - company order tracking
 - company verification by admin
 
@@ -253,6 +257,13 @@ Company procurement requests support:
 - status
 
 This allows companies to post sourcing demand while farmers discover matching procurement opportunities.
+
+Procurement response status contract is externally consistent across SQL checks, backend validation, and frontend UI:
+
+- `submitted`
+- `accepted`
+- `rejected`
+- `withdrawn`
 
 ### 8. Admin Operations
 
@@ -551,6 +562,7 @@ Recent financing schema additions include support for:
 - loan readiness depends heavily on verified identity, payout setup, and order history
 - county-based loans will not appear for borrowers without a matching county on profile
 - company dashboards depend on company-related tables being present in Supabase
+- procurement response actions depend on `company_procurement_responses` being installed and RLS-enabled
 - the map on `My Farm` prefers saved GPS coordinates over generic county display
 - M-Pesa can run in sandbox or mock-backed mode depending on backend configuration
 

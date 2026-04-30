@@ -1785,6 +1785,32 @@ CREATE TABLE IF NOT EXISTS public.company_procurement_requests (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.company_procurement_responses (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  request_id uuid NOT NULL REFERENCES public.company_procurement_requests(id) ON DELETE CASCADE,
+  company_id uuid NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  farmer_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+  quantity_offered numeric(12,2) NOT NULL CHECK (quantity_offered > 0),
+  accepted_quantity numeric(12,2) CHECK (accepted_quantity IS NULL OR accepted_quantity > 0),
+  unit text NOT NULL DEFAULT 'kg',
+  price_per_unit numeric(12,2) NOT NULL CHECK (price_per_unit > 0),
+  currency text NOT NULL DEFAULT 'KES',
+  notes text,
+  company_note text,
+  status text NOT NULL DEFAULT 'submitted'
+    CHECK (status IN ('submitted', 'accepted', 'rejected', 'withdrawn')),
+  order_id uuid REFERENCES public.orders(id) ON DELETE SET NULL,
+  decided_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (request_id, farmer_id, product_id),
+  CONSTRAINT company_procurement_responses_accepted_consistency_chk CHECK (
+    (status = 'accepted' AND accepted_quantity IS NOT NULL AND order_id IS NOT NULL)
+    OR (status <> 'accepted' AND order_id IS NULL)
+  )
+);
+
 CREATE INDEX IF NOT EXISTS idx_companies_user_id ON public.companies(user_id);
 CREATE INDEX IF NOT EXISTS idx_companies_verification_status ON public.companies(verification_status);
 CREATE INDEX IF NOT EXISTS idx_company_products_company_id ON public.company_products(company_id);
@@ -1792,6 +1818,10 @@ CREATE INDEX IF NOT EXISTS idx_company_orders_company_id ON public.company_order
 CREATE INDEX IF NOT EXISTS idx_farmer_company_relations_company_id ON public.farmer_company_relations(company_id);
 CREATE INDEX IF NOT EXISTS idx_company_contracts_company_id ON public.company_contracts(company_id);
 CREATE INDEX IF NOT EXISTS idx_company_procurement_requests_company_id ON public.company_procurement_requests(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_procurement_responses_request_id ON public.company_procurement_responses(request_id);
+CREATE INDEX IF NOT EXISTS idx_company_procurement_responses_company_id ON public.company_procurement_responses(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_procurement_responses_farmer_id ON public.company_procurement_responses(farmer_id);
+CREATE INDEX IF NOT EXISTS idx_company_procurement_responses_status ON public.company_procurement_responses(status);
 
 ALTER TABLE public.companies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_products ENABLE ROW LEVEL SECURITY;
@@ -1799,6 +1829,7 @@ ALTER TABLE public.company_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.farmer_company_relations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_contracts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.company_procurement_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.company_procurement_responses ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "companies_owner_select" ON public.companies;
 DROP POLICY IF EXISTS "companies_owner_insert" ON public.companies;
@@ -1909,6 +1940,49 @@ DROP POLICY IF EXISTS "company_procurement_open_read" ON public.company_procurem
 CREATE POLICY "company_procurement_open_read" ON public.company_procurement_requests FOR SELECT
 USING (status = 'open');
 
+DROP POLICY IF EXISTS "company_procurement_responses_company_read" ON public.company_procurement_responses;
+CREATE POLICY "company_procurement_responses_company_read" ON public.company_procurement_responses FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.companies c
+    WHERE c.id = company_procurement_responses.company_id
+      AND c.user_id = auth.uid()
+  )
+);
+
+DROP POLICY IF EXISTS "company_procurement_responses_company_update" ON public.company_procurement_responses;
+CREATE POLICY "company_procurement_responses_company_update" ON public.company_procurement_responses FOR UPDATE
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.companies c
+    WHERE c.id = company_procurement_responses.company_id
+      AND c.user_id = auth.uid()
+  )
+)
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.companies c
+    WHERE c.id = company_procurement_responses.company_id
+      AND c.user_id = auth.uid()
+  )
+);
+
+DROP POLICY IF EXISTS "company_procurement_responses_farmer_read" ON public.company_procurement_responses;
+CREATE POLICY "company_procurement_responses_farmer_read" ON public.company_procurement_responses FOR SELECT
+USING (farmer_id = auth.uid());
+
+DROP POLICY IF EXISTS "company_procurement_responses_farmer_insert" ON public.company_procurement_responses;
+CREATE POLICY "company_procurement_responses_farmer_insert" ON public.company_procurement_responses FOR INSERT
+WITH CHECK (farmer_id = auth.uid());
+
+DROP POLICY IF EXISTS "company_procurement_responses_farmer_update" ON public.company_procurement_responses;
+CREATE POLICY "company_procurement_responses_farmer_update" ON public.company_procurement_responses FOR UPDATE
+USING (farmer_id = auth.uid())
+WITH CHECK (farmer_id = auth.uid());
+
 DROP TRIGGER IF EXISTS update_companies_updated_at ON public.companies;
 CREATE TRIGGER update_companies_updated_at
 BEFORE UPDATE ON public.companies
@@ -1937,6 +2011,11 @@ FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 DROP TRIGGER IF EXISTS update_company_procurement_requests_updated_at ON public.company_procurement_requests;
 CREATE TRIGGER update_company_procurement_requests_updated_at
 BEFORE UPDATE ON public.company_procurement_requests
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_company_procurement_responses_updated_at ON public.company_procurement_responses;
+CREATE TRIGGER update_company_procurement_responses_updated_at
+BEFORE UPDATE ON public.company_procurement_responses
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 CREATE OR REPLACE FUNCTION public.sync_company_role_from_company_record()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import json
 import logging
 from typing import Any
@@ -20,6 +21,7 @@ from .common import (
     build_safe_storage_path,
     normalize_kenyan_phone,
     method_not_allowed,
+    now_iso,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 
@@ -85,6 +87,222 @@ def _parse_non_negative_number(value: Any, field_label: str, *, allow_zero: bool
         raise ApiException(f"{field_label} must be {comparator}.", 400)
 
     return parsed
+
+
+PROCUREMENT_REQUEST_STATUSES = {"open", "paused", "closed"}
+PROCUREMENT_RESPONSE_STATUSES = {"submitted", "accepted", "rejected", "withdrawn"}
+PROCUREMENT_RESPONSE_DECISIONS = {"accept", "reject"}
+
+
+def _parse_enum_text(
+    value: Any,
+    field_label: str,
+    *,
+    allowed: set[str],
+    optional: bool = True,
+    allow_all: bool = False,
+) -> str | None:
+    cleaned = _clean_optional_text(value)
+    if not cleaned:
+        if optional:
+            return None
+        raise ApiException(f"{field_label} is required.", 400)
+
+    normalized = cleaned.lower()
+    if allow_all and normalized == "all":
+        return normalized
+
+    if normalized not in allowed:
+        values = ", ".join(sorted(allowed))
+        if allow_all:
+            values = f"{values}, all"
+        raise ApiException(f"{field_label} must be one of: {values}.", 400)
+    return normalized
+
+
+def _coerce_float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_iso_date_relaxed(value: Any) -> date | None:
+    cleaned = _clean_optional_text(value)
+    if not cleaned:
+        return None
+    try:
+        return date.fromisoformat(cleaned[:10])
+    except ValueError:
+        return None
+
+
+def _normalize_currency_code(value: Any, *, default: str = "KES") -> str:
+    cleaned = _clean_optional_text(value) or default
+    code = cleaned.upper()
+    if not code.isascii() or len(code) < 3 or len(code) > 6:
+        raise ApiException("Currency must be a valid alphabetic code like KES or USD.", 400)
+    if not code.isalpha():
+        raise ApiException("Currency must only contain letters.", 400)
+    return code
+
+
+def _parse_optional_date_text(value: Any, field_label: str) -> str | None:
+    cleaned = _clean_optional_text(value)
+    if not cleaned:
+        return None
+    try:
+        # Keep date as ISO text for Supabase while validating format.
+        return str(date.fromisoformat(cleaned))
+    except ValueError:
+        raise ApiException(f"{field_label} must be a valid date in YYYY-MM-DD format.", 400)
+
+
+def _enrich_procurement_responses(client, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    farmer_ids = sorted({str(row.get("farmer_id") or "").strip() for row in rows if row.get("farmer_id")})
+    product_ids = sorted({str(row.get("product_id") or "").strip() for row in rows if row.get("product_id")})
+
+    profile_by_id = load_profiles_by_user_ids(
+        client,
+        farmer_ids,
+        select="user_id, full_name, county, phone, farm_size, main_crops",
+    ) if farmer_ids else {}
+    product_rows, _ = client.select(
+        "products",
+        select="id, farmer_id, name, category, unit, price_per_unit, stock, is_available, cover_image_url",
+        filters={"id": f"in.{postgrest_in(product_ids)}"} if product_ids else {},
+    )
+    product_by_id = {row["id"]: row for row in product_rows or []}
+
+    enriched = []
+    for row in rows:
+        quantity_offered = float(row.get("quantity_offered") or 0)
+        price_per_unit = float(row.get("price_per_unit") or 0)
+        accepted_quantity_raw = row.get("accepted_quantity")
+        accepted_quantity = float(accepted_quantity_raw) if accepted_quantity_raw is not None else None
+        farmer_id = row.get("farmer_id")
+        product_id = row.get("product_id")
+        profile = profile_by_id.get(farmer_id or "", {})
+        product = product_by_id.get(product_id)
+
+        enriched.append(
+            {
+                **row,
+                "quantity_offered": quantity_offered,
+                "price_per_unit": price_per_unit,
+                "accepted_quantity": accepted_quantity,
+                "total_amount": round(quantity_offered * price_per_unit, 2),
+                "currency": str(row.get("currency") or "KES"),
+                "price_rank": None,
+                "is_best_price_offer": False,
+                "budget_fit": "unbounded",
+                "price_vs_budget_max_pct": None,
+                "market_signal": "market_rate",
+                "days_until_needed_by": None,
+                "farmer_profile": profile or None,
+                "product": (
+                    {
+                        "id": product.get("id"),
+                        "name": product.get("name"),
+                        "category": product.get("category"),
+                        "unit": product.get("unit"),
+                        "price_per_unit": float(product.get("price_per_unit") or 0),
+                        "stock": float(product.get("stock") or 0),
+                        "is_available": bool(product.get("is_available")),
+                        "cover_image_url": product.get("cover_image_url"),
+                    }
+                    if product
+                    else None
+                ),
+            }
+        )
+
+    return enriched
+
+
+def _apply_procurement_response_market_insights(
+    procurement_request: dict[str, Any],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    budget_min = _coerce_float_or_none(procurement_request.get("budget_min"))
+    budget_max = _coerce_float_or_none(procurement_request.get("budget_max"))
+    needed_by = _parse_iso_date_relaxed(procurement_request.get("needed_by"))
+    days_until_needed_by = (needed_by - date.today()).days if needed_by else None
+
+    rankable_rows = [
+        row
+        for row in rows
+        if str(row.get("status") or "").strip().lower() in {"submitted", "accepted"}
+    ]
+    ranked = sorted(
+        rankable_rows,
+        key=lambda item: (
+            float(item.get("price_per_unit") or 0),
+            str(item.get("created_at") or ""),
+            str(item.get("id") or ""),
+        ),
+    )
+    rank_by_id = {str(item.get("id")): index + 1 for index, item in enumerate(ranked) if item.get("id")}
+    best_price = float(ranked[0].get("price_per_unit") or 0) if ranked else None
+
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        row_id = str(row.get("id") or "")
+        price_per_unit = float(row.get("price_per_unit") or 0)
+
+        budget_fit = "unbounded"
+        if budget_min is not None and budget_max is not None:
+            if price_per_unit < budget_min:
+                budget_fit = "below_budget"
+            elif price_per_unit > budget_max:
+                budget_fit = "over_budget"
+            else:
+                budget_fit = "within_budget"
+        elif budget_min is not None:
+            budget_fit = "below_budget" if price_per_unit < budget_min else "within_budget"
+        elif budget_max is not None:
+            budget_fit = "over_budget" if price_per_unit > budget_max else "within_budget"
+
+        price_vs_budget_max_pct = None
+        if budget_max is not None and budget_max > 0:
+            price_vs_budget_max_pct = round(((price_per_unit - budget_max) / budget_max) * 100, 2)
+
+        is_best_price_offer = bool(
+            row_id
+            and best_price is not None
+            and abs(price_per_unit - best_price) <= 1e-9
+            and row_id in rank_by_id
+        )
+
+        market_signal = "market_rate"
+        if budget_fit == "over_budget":
+            market_signal = "over_budget"
+        elif budget_fit == "within_budget" and is_best_price_offer:
+            market_signal = "best_value"
+        elif budget_fit == "below_budget":
+            market_signal = "aggressive_pricing"
+
+        enriched.append(
+            {
+                **row,
+                "price_rank": rank_by_id.get(row_id),
+                "is_best_price_offer": is_best_price_offer,
+                "budget_fit": budget_fit,
+                "price_vs_budget_max_pct": price_vs_budget_max_pct,
+                "market_signal": market_signal,
+                "days_until_needed_by": days_until_needed_by,
+            }
+        )
+
+    return enriched
 
 
 def api_exception_response(exc: ApiException) -> JsonResponse:
@@ -839,10 +1057,58 @@ def company_procurement_request_update(request: HttpRequest, request_id: str):
         )
         if not records:
             return JsonResponse({"error": "Procurement request not found"}, status=404)
-        allowed_fields = ["title", "category", "target_county", "quantity_needed", "unit", "budget_min", "budget_max", "needed_by", "notes", "status"]
-        update_data = {field: data[field] for field in allowed_fields if field in data}
+        update_data: dict[str, Any] = {}
+        if "title" in data:
+            update_data["title"] = _clean_required_text(data.get("title"), "Title")
+        if "category" in data:
+            update_data["category"] = _clean_optional_text(data.get("category")) or "other"
+        if "target_county" in data:
+            update_data["target_county"] = _clean_optional_text(data.get("target_county"))
+        if "quantity_needed" in data:
+            update_data["quantity_needed"] = _parse_non_negative_number(data.get("quantity_needed"), "Quantity needed")
+        if "unit" in data:
+            update_data["unit"] = _clean_optional_text(data.get("unit")) or "kg"
+        if "budget_min" in data:
+            update_data["budget_min"] = (
+                _parse_non_negative_number(data.get("budget_min"), "Budget minimum")
+                if data.get("budget_min") not in (None, "")
+                else None
+            )
+        if "budget_max" in data:
+            update_data["budget_max"] = (
+                _parse_non_negative_number(data.get("budget_max"), "Budget maximum")
+                if data.get("budget_max") not in (None, "")
+                else None
+            )
+        if "needed_by" in data:
+            update_data["needed_by"] = _parse_optional_date_text(data.get("needed_by"), "Needed-by date")
+        if "notes" in data:
+            update_data["notes"] = _clean_optional_text(data.get("notes"))
+        if "status" in data:
+            update_data["status"] = _parse_enum_text(
+                data.get("status"),
+                "Status",
+                allowed=PROCUREMENT_REQUEST_STATUSES,
+                optional=False,
+            )
+
         if not update_data:
             return JsonResponse({"error": "No valid fields to update"}, status=400)
+
+        current_row = records[0]
+        budget_min = (
+            update_data["budget_min"]
+            if "budget_min" in update_data
+            else _coerce_float_or_none(current_row.get("budget_min"))
+        )
+        budget_max = (
+            update_data["budget_max"]
+            if "budget_max" in update_data
+            else _coerce_float_or_none(current_row.get("budget_max"))
+        )
+        if budget_min is not None and budget_max is not None and budget_max < budget_min:
+            raise ApiException("Budget maximum must be greater than or equal to budget minimum.", 400)
+
         result = client.update("company_procurement_requests", update_data, filters={"id": f"eq.{request_id}"})
         return JsonResponse({"request": result[0] if result else {**records[0], **update_data}, "success": True})
     except ApiException as exc:
@@ -881,7 +1147,12 @@ def company_procurement_requests_list(request: HttpRequest):
         user = request.auth_user
         client = request.supabase
         company = get_company_for_user(client, user.get("id"))
-        status_filter = request.GET.get("status")
+        status_filter = _parse_enum_text(
+            request.GET.get("status"),
+            "Status filter",
+            allowed=PROCUREMENT_REQUEST_STATUSES,
+            allow_all=True,
+        )
         filters = {"company_id": f"eq.{company['id']}"}
         if status_filter and status_filter != "all":
             filters["status"] = f"eq.{status_filter}"
@@ -893,7 +1164,60 @@ def company_procurement_requests_list(request: HttpRequest):
             order="created_at.desc",
             limit=100,
         )
-        return JsonResponse({"requests": requests_rows or [], "total": len(requests_rows or [])})
+        requests_rows = requests_rows or []
+        request_ids = [row["id"] for row in requests_rows if row.get("id")]
+
+        counts_by_request: dict[str, dict[str, int]] = {}
+        if request_ids:
+            responses, _ = _safe_select(
+                client,
+                "company_procurement_responses",
+                default=[],
+                select="id, request_id, status",
+                filters={"request_id": f"in.{postgrest_in(request_ids)}"},
+                limit=500,
+            )
+            for response in responses or []:
+                request_id = response.get("request_id")
+                if not request_id:
+                    continue
+                bucket = counts_by_request.setdefault(
+                    request_id,
+                    {
+                        "responses_count": 0,
+                        "submitted_responses_count": 0,
+                        "accepted_responses_count": 0,
+                        "rejected_responses_count": 0,
+                        "withdrawn_responses_count": 0,
+                    },
+                )
+                bucket["responses_count"] += 1
+                status = str(response.get("status") or "")
+                if status == "submitted":
+                    bucket["submitted_responses_count"] += 1
+                elif status == "accepted":
+                    bucket["accepted_responses_count"] += 1
+                elif status == "rejected":
+                    bucket["rejected_responses_count"] += 1
+                elif status == "withdrawn":
+                    bucket["withdrawn_responses_count"] += 1
+
+        rows = []
+        for item in requests_rows:
+            request_id = item.get("id")
+            counts = counts_by_request.get(
+                request_id,
+                {
+                    "responses_count": 0,
+                    "submitted_responses_count": 0,
+                    "accepted_responses_count": 0,
+                    "rejected_responses_count": 0,
+                    "withdrawn_responses_count": 0,
+                },
+            )
+            rows.append({**item, **counts})
+
+        return JsonResponse({"requests": rows, "total": len(rows)})
     except ApiException as exc:
         return api_exception_response(exc)
     except Exception as e:
@@ -912,17 +1236,24 @@ def company_procurement_requests_create(request: HttpRequest):
         company = get_company_for_user(client, user.get("id"))
         request_data = {
             "company_id": company["id"],
-            "title": data.get("title"),
-            "category": data.get("category", "other"),
-            "target_county": data.get("target_county"),
-            "quantity_needed": data.get("quantity_needed", 0),
-            "unit": data.get("unit", "kg"),
-            "budget_min": data.get("budget_min"),
-            "budget_max": data.get("budget_max"),
-            "needed_by": data.get("needed_by"),
-            "notes": data.get("notes"),
-            "status": data.get("status", "open"),
+            "title": _clean_required_text(data.get("title"), "Title"),
+            "category": _clean_optional_text(data.get("category")) or "other",
+            "target_county": _clean_optional_text(data.get("target_county")),
+            "quantity_needed": _parse_non_negative_number(data.get("quantity_needed", 0), "Quantity needed"),
+            "unit": _clean_optional_text(data.get("unit")) or "kg",
+            "budget_min": _parse_non_negative_number(data.get("budget_min"), "Budget minimum") if data.get("budget_min") not in (None, "") else None,
+            "budget_max": _parse_non_negative_number(data.get("budget_max"), "Budget maximum") if data.get("budget_max") not in (None, "") else None,
+            "needed_by": _parse_optional_date_text(data.get("needed_by"), "Needed-by date"),
+            "notes": _clean_optional_text(data.get("notes")),
+            "status": _parse_enum_text(
+                data.get("status", "open"),
+                "Status",
+                allowed=PROCUREMENT_REQUEST_STATUSES,
+                optional=False,
+            ),
         }
+        if request_data["budget_min"] is not None and request_data["budget_max"] is not None and request_data["budget_max"] < request_data["budget_min"]:
+            raise ApiException("Budget maximum must be greater than or equal to budget minimum.", 400)
         result = client.insert("company_procurement_requests", [request_data])
         return JsonResponse({"request": result[0] if result else request_data, "success": True}, status=201)
     except requests.HTTPError as exc:
@@ -937,6 +1268,411 @@ def company_procurement_requests_create(request: HttpRequest):
     except Exception as e:
         logger.error(f"Error creating procurement request: {e}")
         return JsonResponse({"error": "Failed to create procurement request"}, status=500)
+
+
+@require_auth
+def company_procurement_request_responses(request: HttpRequest, request_id: str):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    try:
+        user = request.auth_user
+        client = request.supabase
+        company = get_company_for_user(client, user.get("id"))
+
+        procurement_request, _ = client.select(
+            "company_procurement_requests",
+            filters={"id": f"eq.{request_id}", "company_id": f"eq.{company['id']}"},
+            single=True,
+        )
+        if not procurement_request:
+            return JsonResponse({"error": "Procurement request not found."}, status=404)
+
+        response_status = _parse_enum_text(
+            request.GET.get("status"),
+            "Response status filter",
+            allowed=PROCUREMENT_RESPONSE_STATUSES,
+            allow_all=True,
+        )
+        filters = {"request_id": f"eq.{request_id}"}
+        if response_status and response_status != "all":
+            filters["status"] = f"eq.{response_status}"
+
+        responses, _ = _safe_select(
+            client,
+            "company_procurement_responses",
+            default=[],
+            filters=filters,
+            order="created_at.desc",
+            limit=300,
+        )
+        rows = _enrich_procurement_responses(client, responses or [])
+        rows = _apply_procurement_response_market_insights(procurement_request, rows)
+        return JsonResponse(
+            {
+                "request": procurement_request,
+                "responses": rows,
+                "total": len(rows),
+            }
+        )
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "company_procurement_responses"):
+            return JsonResponse(
+                {"error": "Procurement responses are not installed in the database yet. Run setup_database.sql, then try again."},
+                status=503,
+            )
+        raise
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error listing procurement responses: {e}")
+        return JsonResponse({"error": "Failed to list procurement responses"}, status=500)
+
+
+@require_auth
+def company_procurement_response_decision(request: HttpRequest, request_id: str, response_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+    try:
+        user = request.auth_user
+        client = request.supabase
+        data = parse_json_body(request)
+        company = get_company_for_user(client, user.get("id"))
+        company_note = _clean_optional_text(data.get("company_note"))
+        decision_raw = str(data.get("decision") or data.get("action") or data.get("status") or "").strip().lower()
+        decision = (
+            "accept"
+            if decision_raw in {"accept", "accepted"}
+            else "reject" if decision_raw in {"reject", "rejected"} else ""
+        )
+        if decision not in PROCUREMENT_RESPONSE_DECISIONS:
+            raise ApiException("Decision must be accept or reject.", 400)
+
+        procurement_request, _ = client.select(
+            "company_procurement_requests",
+            select="id, company_id, title, target_county, status",
+            filters={"id": f"eq.{request_id}", "company_id": f"eq.{company['id']}"},
+            single=True,
+        )
+        if not procurement_request:
+            return JsonResponse({"error": "Procurement request not found."}, status=404)
+
+        response, _ = client.select(
+            "company_procurement_responses",
+            filters={"id": f"eq.{response_id}", "request_id": f"eq.{request_id}", "company_id": f"eq.{company['id']}"},
+            single=True,
+        )
+        if not response:
+            return JsonResponse({"error": "Procurement response not found."}, status=404)
+
+        current_status = str(response.get("status") or "")
+        if decision == "reject":
+            if current_status == "accepted":
+                raise ApiException("Accepted responses cannot be rejected.", 400)
+            if current_status == "rejected":
+                enriched_response = _apply_procurement_response_market_insights(
+                    procurement_request,
+                    _enrich_procurement_responses(client, [response]),
+                )[0]
+                return JsonResponse({"response": enriched_response, "success": True})
+            if current_status != "submitted":
+                raise ApiException("Only submitted responses can be rejected.", 400)
+            updated = client.update(
+                "company_procurement_responses",
+                {
+                    "status": "rejected",
+                    "company_note": company_note,
+                    "accepted_quantity": None,
+                    "order_id": None,
+                    "decided_at": now_iso(),
+                },
+                filters={"id": f"eq.{response_id}"},
+                single=True,
+            )
+            enriched_response = _apply_procurement_response_market_insights(
+                procurement_request,
+                _enrich_procurement_responses(client, [updated]),
+            )[0]
+            return JsonResponse({"response": enriched_response, "success": True})
+
+        if current_status == "accepted" and response.get("order_id"):
+            enriched_response = _apply_procurement_response_market_insights(
+                procurement_request,
+                _enrich_procurement_responses(client, [response]),
+            )[0]
+            return JsonResponse({"response": enriched_response, "success": True})
+        if current_status != "submitted":
+            raise ApiException("Only submitted responses can be accepted.", 400)
+
+        requested_quantity = float(response.get("quantity_offered") or 0)
+        accepted_quantity = (
+            _parse_non_negative_number(data.get("accepted_quantity"), "Accepted quantity", allow_zero=False)
+            if data.get("accepted_quantity") not in (None, "")
+            else requested_quantity
+        )
+        if accepted_quantity <= 0:
+            raise ApiException("Accepted quantity must be greater than zero.", 400)
+        if accepted_quantity > requested_quantity:
+            raise ApiException("Accepted quantity cannot exceed quantity offered.", 400)
+
+        product_id = str(response.get("product_id") or "").strip()
+        if not product_id:
+            raise ApiException("Response is missing a product reference.", 400)
+        product, _ = admin_client().select(
+            "products",
+            select="id, farmer_id, unit, stock, is_available",
+            filters={"id": f"eq.{product_id}"},
+            single=True,
+        )
+        if not product:
+            raise ApiException("Selected product no longer exists.", 404)
+        if str(product.get("farmer_id") or "") != str(response.get("farmer_id") or ""):
+            raise ApiException("Response product no longer belongs to the responding farmer.", 400)
+        if not bool(product.get("is_available")):
+            raise ApiException("Selected product is no longer available.", 400)
+        if float(product.get("stock") or 0) < accepted_quantity:
+            raise ApiException("Selected product does not have enough stock for this acceptance quantity.", 400)
+
+        placement_note = f"Accepted procurement response for request: {procurement_request.get('title') or 'Untitled request'}"
+        if company_note:
+            placement_note = f"{placement_note}. {company_note}"
+
+        result = client.rpc(
+            "place_marketplace_order_v2",
+            {
+                "p_product_id": product_id,
+                "p_quantity": accepted_quantity,
+                "p_unit": _clean_optional_text(response.get("unit")) or _clean_optional_text(product.get("unit")) or "kg",
+                "p_delivery_fee": None,
+                "p_notes": placement_note,
+                "p_delivery_distance_km": None,
+                "p_pickup_county": _clean_optional_text(data.get("pickup_county")) or _clean_optional_text(procurement_request.get("target_county")),
+            },
+        )
+        order_rows = result if isinstance(result, list) else [result] if result else []
+        order = order_rows[0] if order_rows else None
+        if not order:
+            raise ApiException("Order conversion failed. Please try again.", 500)
+
+        updated = client.update(
+            "company_procurement_responses",
+            {
+                "status": "accepted",
+                "company_note": company_note,
+                "accepted_quantity": accepted_quantity,
+                "order_id": order.get("id"),
+                "decided_at": now_iso(),
+            },
+            filters={"id": f"eq.{response_id}"},
+            single=True,
+        )
+
+        if bool(data.get("close_request")):
+            client.update(
+                "company_procurement_requests",
+                {"status": "closed"},
+                filters={"id": f"eq.{request_id}", "company_id": f"eq.{company['id']}"},
+            )
+
+        enriched_response = _apply_procurement_response_market_insights(
+            procurement_request,
+            _enrich_procurement_responses(client, [updated]),
+        )[0]
+        return JsonResponse(
+            {
+                "response": enriched_response,
+                "order": order,
+                "success": True,
+            }
+        )
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "company_procurement_responses"):
+            return JsonResponse(
+                {"error": "Procurement responses are not installed in the database yet. Run setup_database.sql, then try again."},
+                status=503,
+            )
+        raise
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error deciding procurement response: {e}")
+        return JsonResponse({"error": "Failed to decide procurement response"}, status=500)
+
+
+@require_auth
+def farmer_procurement_request_responses(request: HttpRequest, request_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+    try:
+        role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
+        if role not in {"farmer_free", "farmer_pro", "admin"}:
+            raise ApiException("Only farmer accounts can respond to procurement requests.", 403)
+
+        data = parse_json_body(request)
+        product_id = _clean_required_text(data.get("product_id"), "Product")
+        quantity_offered = _parse_non_negative_number(data.get("quantity_offered"), "Quantity offered", allow_zero=False)
+        notes = _clean_optional_text(data.get("notes"))
+        unit_override = _clean_optional_text(data.get("unit"))
+
+        client = request.supabase
+        procurement_request, _ = client.select(
+            "company_procurement_requests",
+            select="id, company_id, status",
+            filters={"id": f"eq.{request_id}"},
+            single=True,
+        )
+        if not procurement_request:
+            return JsonResponse({"error": "Procurement request not found."}, status=404)
+        if procurement_request.get("status") != "open":
+            raise ApiException("This procurement request is not open for responses.", 400)
+
+        product, _ = client.select(
+            "products",
+            select="id, farmer_id, unit, stock, is_available, price_per_unit",
+            filters={"id": f"eq.{product_id}"},
+            single=True,
+        )
+        if not product:
+            raise ApiException("Product not found.", 404)
+        if str(product.get("farmer_id") or "") != request.user_id:
+            raise ApiException("You can only respond with your own product listings.", 403)
+        if not bool(product.get("is_available")):
+            raise ApiException("Selected product is not currently available.", 400)
+        if float(product.get("stock") or 0) < quantity_offered:
+            raise ApiException("Selected product stock is lower than quantity offered.", 400)
+
+        price_per_unit = (
+            _parse_non_negative_number(data.get("price_per_unit"), "Price per unit", allow_zero=False)
+            if data.get("price_per_unit") not in (None, "")
+            else _parse_non_negative_number(product.get("price_per_unit"), "Product price per unit", allow_zero=False)
+        )
+
+        existing_response, _ = client.select(
+            "company_procurement_responses",
+            filters={
+                "request_id": f"eq.{request_id}",
+                "farmer_id": f"eq.{request.user_id}",
+                "product_id": f"eq.{product_id}",
+            },
+            single=True,
+        )
+        if existing_response and str(existing_response.get("status") or "") == "accepted" and existing_response.get("order_id"):
+            raise ApiException("This offer was already accepted and converted into an order.", 400)
+
+        payload = {
+            "request_id": request_id,
+            "company_id": procurement_request.get("company_id"),
+            "farmer_id": request.user_id,
+            "product_id": product_id,
+            "quantity_offered": quantity_offered,
+            "accepted_quantity": None,
+            "unit": unit_override or _clean_optional_text(product.get("unit")) or "kg",
+            "price_per_unit": price_per_unit,
+            "currency": _normalize_currency_code(data.get("currency")),
+            "notes": notes,
+            "company_note": None,
+            "status": "submitted",
+            "order_id": None,
+            "decided_at": None,
+        }
+
+        row = client.insert(
+            "company_procurement_responses",
+            payload,
+            single=True,
+            upsert=True,
+            on_conflict="request_id,farmer_id,product_id",
+        )
+        enriched = _apply_procurement_response_market_insights(
+            procurement_request,
+            _enrich_procurement_responses(client, [row]),
+        )[0]
+        return JsonResponse({"response": enriched, "success": True}, status=201)
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "company_procurement_responses"):
+            return JsonResponse(
+                {"error": "Procurement responses are not installed in the database yet. Run setup_database.sql, then try again."},
+                status=503,
+            )
+        raise
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error submitting procurement response: {e}")
+        return JsonResponse({"error": "Failed to submit procurement response"}, status=500)
+
+
+@require_auth
+def farmer_procurement_response_withdraw(request: HttpRequest, request_id: str, response_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    try:
+        role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
+        if role not in {"farmer_free", "farmer_pro", "admin"}:
+            raise ApiException("Only farmer accounts can withdraw procurement offers.", 403)
+
+        client = request.supabase
+        procurement_request, _ = client.select(
+            "company_procurement_requests",
+            select="id, company_id, budget_min, budget_max, needed_by, status",
+            filters={"id": f"eq.{request_id}"},
+            single=True,
+        )
+        if not procurement_request:
+            return JsonResponse({"error": "Procurement request not found."}, status=404)
+
+        response, _ = client.select(
+            "company_procurement_responses",
+            filters={
+                "id": f"eq.{response_id}",
+                "request_id": f"eq.{request_id}",
+                "farmer_id": f"eq.{request.user_id}",
+            },
+            single=True,
+        )
+        if not response:
+            return JsonResponse({"error": "Procurement response not found."}, status=404)
+
+        current_status = str(response.get("status") or "")
+        if current_status == "accepted" and response.get("order_id"):
+            raise ApiException("Accepted procurement offers cannot be withdrawn.", 400)
+        if current_status not in {"submitted", "rejected", "withdrawn"}:
+            raise ApiException("This procurement offer cannot be withdrawn.", 400)
+        if current_status == "withdrawn":
+            enriched = _apply_procurement_response_market_insights(
+                procurement_request,
+                _enrich_procurement_responses(client, [response]),
+            )[0]
+            return JsonResponse({"response": enriched, "success": True})
+
+        updated = client.update(
+            "company_procurement_responses",
+            {
+                "status": "withdrawn",
+                "accepted_quantity": None,
+                "order_id": None,
+                "decided_at": None,
+            },
+            filters={"id": f"eq.{response_id}", "farmer_id": f"eq.{request.user_id}"},
+            single=True,
+        )
+        enriched = _apply_procurement_response_market_insights(
+            procurement_request,
+            _enrich_procurement_responses(client, [updated]),
+        )[0]
+        return JsonResponse({"response": enriched, "success": True})
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "company_procurement_responses"):
+            return JsonResponse(
+                {"error": "Procurement responses are not installed in the database yet. Run setup_database.sql, then try again."},
+                status=503,
+            )
+        raise
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error withdrawing procurement response: {e}")
+        return JsonResponse({"error": "Failed to withdraw procurement response"}, status=500)
 
 
 @require_auth
@@ -983,7 +1719,7 @@ def farmer_procurement_list(request: HttpRequest):
             )
             company_map = {company["id"]: company for company in companies or []}
 
-        enriched_rows = []
+        enriched_rows: list[dict[str, Any]] = []
         for row in requests_rows:
             company = company_map.get(row.get("company_id"))
             if not company:
@@ -1014,7 +1750,74 @@ def farmer_procurement_list(request: HttpRequest):
                 }
             )
 
-        return JsonResponse({"requests": enriched_rows, "total": len(enriched_rows)})
+        request_ids = [row["id"] for row in enriched_rows if row.get("id")]
+        responses_count_by_request: dict[str, int] = {}
+        accepted_count_by_request: dict[str, int] = {}
+        submitted_count_by_request: dict[str, int] = {}
+        rejected_count_by_request: dict[str, int] = {}
+        withdrawn_count_by_request: dict[str, int] = {}
+        my_response_rows_by_request: dict[str, list[dict[str, Any]]] = {}
+
+        if request_ids:
+            all_responses, _ = _safe_select(
+                admin,
+                "company_procurement_responses",
+                default=[],
+                select="id, request_id, status",
+                filters={"request_id": f"in.{postgrest_in(request_ids)}"},
+                limit=500,
+            )
+            for response in all_responses or []:
+                key = str(response.get("request_id") or "")
+                if not key:
+                    continue
+                responses_count_by_request[key] = responses_count_by_request.get(key, 0) + 1
+                status = str(response.get("status") or "")
+                if status == "submitted":
+                    submitted_count_by_request[key] = submitted_count_by_request.get(key, 0) + 1
+                elif status == "accepted":
+                    accepted_count_by_request[key] = accepted_count_by_request.get(key, 0) + 1
+                elif status == "rejected":
+                    rejected_count_by_request[key] = rejected_count_by_request.get(key, 0) + 1
+                elif status == "withdrawn":
+                    withdrawn_count_by_request[key] = withdrawn_count_by_request.get(key, 0) + 1
+
+            my_responses, _ = _safe_select(
+                request.supabase,
+                "company_procurement_responses",
+                default=[],
+                filters={
+                    "request_id": f"in.{postgrest_in(request_ids)}",
+                    "farmer_id": f"eq.{request.user_id}",
+                },
+                order="updated_at.desc",
+                limit=200,
+            )
+            for response in _enrich_procurement_responses(request.supabase, my_responses or []):
+                key = str(response.get("request_id") or "")
+                if not key:
+                    continue
+                my_response_rows_by_request.setdefault(key, []).append(response)
+
+        rows = []
+        for row in enriched_rows:
+            request_id = str(row.get("id") or "")
+            my_responses_for_request = my_response_rows_by_request.get(request_id, [])
+            if my_responses_for_request:
+                my_responses_for_request = _apply_procurement_response_market_insights(row, my_responses_for_request)
+            rows.append(
+                {
+                    **row,
+                    "responses_count": responses_count_by_request.get(request_id, 0),
+                    "submitted_responses_count": submitted_count_by_request.get(request_id, 0),
+                    "accepted_responses_count": accepted_count_by_request.get(request_id, 0),
+                    "rejected_responses_count": rejected_count_by_request.get(request_id, 0),
+                    "withdrawn_responses_count": withdrawn_count_by_request.get(request_id, 0),
+                    "my_responses": my_responses_for_request,
+                }
+            )
+
+        return JsonResponse({"requests": rows, "total": len(rows)})
     except Exception as e:
         logger.error(f"Error listing farmer procurement requests: {e}")
         return JsonResponse({"error": "Failed to list procurement requests"}, status=500)

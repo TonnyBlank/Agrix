@@ -23,6 +23,8 @@ The backend is a Django application that preserves the REST API shape expected b
   - company products
   - company partners
   - company procurement requests
+  - company procurement responses (review, accept/reject, convert to marketplace order)
+  - farmer procurement responses (submit, withdraw, resubmit)
   - admin company verification
 - crop scanner endpoints with Gemini support
 
@@ -124,5 +126,6 @@ Run ASGI app directly:
 - `manage.py` is the main local entrypoint
 - Profile updates support extended fields including farm operations and GPS coordinates
 - Company dashboard data depends on the company and procurement tables being present in Supabase
+- Procurement response status contract is enforced in API + SQL: `submitted`, `accepted`, `rejected`, `withdrawn`
 
 For the overall project, see the [root README](../README.md).
