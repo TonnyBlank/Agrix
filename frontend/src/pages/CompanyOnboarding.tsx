@@ -14,7 +14,7 @@ const TESTIMONIALS = [
     role: "Supply Chain Director",
     company: "Rift Valley Processors",
     rating: 5,
-    text: "Before AgriLink, we struggled with inconsistent sourcing. Now we access verified farmers and close deals in half the time. It has completely transformed our supply chain.",
+    text: "Before AgriLink X, we struggled with inconsistent sourcing. Now we access verified farmers and close deals in half the time. It has completely transformed our supply chain.",
   },
   {
     author: "Sarah Ochieng",
@@ -28,7 +28,7 @@ const TESTIMONIALS = [
     role: "CEO",
     company: "Highland Inputs Ltd",
     rating: 5,
-    text: "Being a verified partner has increased our inbound leads by 40%. Farmers inherently trust companies they see on AgriLink.",
+    text: "Being a verified partner has increased our inbound leads by 40%. Farmers inherently trust companies they see on AgriLink X.",
   }
 ];
 
@@ -161,7 +161,7 @@ export default function CompanyOnboarding() {
               Enterprise Network
             </span>
             <h1 className="mt-4 mb-6 text-4xl font-display font-bold text-foreground md:text-5xl lg:text-6xl">
-              Scale your Agribusiness with <span className="text-gradient-gold">AgriLink</span>
+              Scale your Agribusiness with <span className="text-gradient-gold">AgriLink X</span>
             </h1>
             <p className="text-lg text-muted-foreground leading-relaxed max-w-3xl mx-auto text-balance">
               Join the fastest growing agricultural marketplace. Source directly from verified farmers, expand your logistics operations, and completely digitize your procurement pipeline.
@@ -179,7 +179,7 @@ export default function CompanyOnboarding() {
               <div>
                 <h2 className="text-3xl font-bold font-display mb-6 text-foreground">Direct Access to 10,000+ Farmers</h2>
                 <p className="text-muted-foreground mb-4 leading-relaxed text-lg">
-                  Cut out the middlemen and source exactly what you need. By registering your company on AgriLink, you gain immediate, transparent access to a trusted pool of crop producers across Kenya.
+                  Cut out the middlemen and source exactly what you need. By registering your company on AgriLink X, you gain immediate, transparent access to a trusted pool of crop producers across Kenya.
                 </p>
                 <div className="grid grid-cols-2 gap-4 mt-8">
                   <div className="bg-primary/5 rounded-[1.5rem] p-6 border border-primary/10 flex flex-col items-start transition-transform hover:-translate-y-1">
@@ -261,7 +261,7 @@ export default function CompanyOnboarding() {
                       </div>
                       <h2 className="text-3xl font-bold font-display mb-4 text-foreground">Application Received</h2>
                       <p className="text-muted-foreground mb-8 text-lg max-w-2xl mx-auto">
-                        Thank you for your interest in partnering with AgriLink. Our Enterprise team will review your application and respond in less than 24 hours to finalize your verified status.
+                        Thank you for your interest in partnering with AgriLink X. Our Enterprise team will review your application and respond in less than 24 hours to finalize your verified status.
                       </p>
                       <Link to="/" className="inline-flex items-center justify-center whitespace-nowrap rounded-full text-base font-medium transition-all bg-primary text-primary-foreground hover:bg-primary/90 h-12 px-10 shadow-[0_10px_30px_-10px_rgba(21,128,61,0.5)] hover:-translate-y-0.5">
                         Return to Homepage

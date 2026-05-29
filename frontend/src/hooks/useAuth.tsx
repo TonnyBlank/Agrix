@@ -33,7 +33,7 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 async function loadProfileFromSupabase(userId: string, fallbackFullName?: string | null) {
-  let { data: profileData, error: profileError } = await supabase
+  const { data: profileData, error: profileError } = await supabase
     .from("profiles")
     .select("*")
     .eq("user_id", userId)
@@ -49,7 +49,7 @@ async function loadProfileFromSupabase(userId: string, fallbackFullName?: string
       .single();
 
     if (createError) throw createError;
-    profileData = createdProfile;
+    return createdProfile;
   }
 
   return profileData;

@@ -9,6 +9,7 @@ from .common import (
     LOAN_BRANCH_VISIT_STATUSES,
     LOAN_PRODUCT_TYPES,
     LOAN_SECURITY_TYPES,
+    admin_client,
     api_view,
     build_loan_schedule,
     method_not_allowed,
@@ -18,6 +19,8 @@ from .common import (
     postgrest_in,
     require_auth,
     resolve_app_role,
+    write_user_notification,
+    write_user_notifications,
 )
 from .http import HttpRequest, JsonResponse
 
@@ -514,6 +517,45 @@ def micro_loan_applications(request: HttpRequest):
         },
         single=True,
     )
+    notification_admin = admin_client()
+    write_user_notification(
+        notification_admin,
+        user_id=request.user_id,
+        title="Loan application submitted",
+        message=(
+            "Your loan application is pending manual review."
+            if application_status == "pending_review"
+            else "Your loan was submitted and disbursed based on readiness checks."
+        ),
+        priority="high" if application_status == "pending_review" else "medium",
+        category="update",
+        entity_type="loan_application",
+        entity_id=str(created.get("id") or "").strip() or None,
+        action_url="/dashboard/micro-loans",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"status": application_status, "product_type": selected_product_type},
+    )
+    if application_status == "pending_review":
+        admin_rows, _ = notification_admin.select("user_roles", select="user_id", filters={"role": "eq.admin"})
+        write_user_notifications(
+            notification_admin,
+            user_ids=[str(item.get("user_id") or "").strip() for item in (admin_rows or [])],
+            title="New loan application pending review",
+            message="A borrower submitted a loan application that requires manual review.",
+            priority="high",
+            category="action",
+            entity_type="loan_application",
+            entity_id=str(created.get("id") or "").strip() or None,
+            action_url="/dashboard/admin/loan-decisions",
+            source="user",
+            source_user_id=request.user_id,
+            metadata={
+                "applicant_role": role,
+                "product_type": selected_product_type,
+                "target_county": target_county,
+            },
+        )
     return JsonResponse(serialize_loan_application(created, []), status=201)
 
 

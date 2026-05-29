@@ -60,7 +60,7 @@ export default function MicroLoansSection() {
           className="mx-auto max-w-4xl text-center"
         >
           <span className="text-sm font-semibold uppercase tracking-widest text-accent">
-            Micro Loans
+            Micro-Loans
           </span>
           <h2 className="mt-3 text-3xl font-display font-bold text-foreground md:text-5xl">
             Fast farm financing that stays{" "}

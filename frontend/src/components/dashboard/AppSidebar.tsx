@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  AlertTriangle,
   Bell,
   BarChart3,
   Building2,
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Sprout,
+  Target,
   Users,
   Zap,
 } from "lucide-react";
@@ -54,17 +56,21 @@ const mainNav = [
 
 const adminNav = [
   { title: "Overview", url: "/dashboard/admin", icon: ShieldCheck },
-  { title: "Loan Analytics", url: "/dashboard/admin/loans", icon: CreditCard },
+  { title: "Loan Offers", url: "/dashboard/admin/loans", icon: CreditCard },
   { title: "Loan Decisions", url: "/dashboard/admin/loan-decisions", icon: ClipboardList },
   { title: "Transactions", url: "/dashboard/admin/transactions", icon: ClipboardList },
+  { title: "Disputes", url: "/dashboard/admin/disputes", icon: AlertTriangle },
   { title: "Company Review", url: "/dashboard/admin/companies", icon: Building2 },
+  { title: "Verifications", url: "/dashboard/admin/verifications", icon: ShieldCheck },
+  { title: "Feature Flags", url: "/dashboard/admin/feature-flags", icon: Zap },
+  { title: "Audit Logs", url: "/dashboard/admin/audit-logs", icon: Radar },
   { title: "User Roles", url: "/dashboard/admin/users", icon: Users },
   { title: "Profile & Settings", url: "/dashboard/profile", icon: Settings2 },
 ];
 
 const farmerNav = [
   { title: "My Farm", url: "/dashboard/farm", icon: Sprout },
-  { title: "Upload & Sell", url: "/dashboard/products", icon: Package },
+  { title: "My Products", url: "/dashboard/products", icon: Package },
 ];
 
 const companyNav = [
@@ -96,6 +102,7 @@ const systemNav = [
 const intelligenceNav = [
   { title: "AI Scanner", url: "/dashboard/ai-scanner", icon: ScanLine, pro: true },
   { title: "Crop Calendar", url: "/dashboard/calendar", icon: Calendar },
+  { title: "Deal Matches", url: "/dashboard/deal-matches", icon: Target },
   { title: "Community", url: "/dashboard/community", icon: Users },
 ];
 
@@ -230,7 +237,7 @@ function GrowthNavGroup({ collapsed }: GrowthNavGroupProps) {
               className={navButtonClass(isMicroLoansRoute)}
             >
               <CreditCard className="h-4 w-4 shrink-0" />
-              {!collapsed && <span className="truncate">Micro Loans</span>}
+              {!collapsed && <span className="truncate">Micro-Loans</span>}
               {!collapsed && !isProRole(role) && (
                 <span className="ml-auto rounded-full bg-gold-500/18 px-1.5 py-0.5 text-[10px] font-semibold text-gold-400">
                   PRO
@@ -240,7 +247,7 @@ function GrowthNavGroup({ collapsed }: GrowthNavGroupProps) {
             {!collapsed && (
               <SidebarMenuAction
                 onClick={() => setMicroLoansOpen((open) => !open)}
-                aria-label={microLoansOpen ? "Collapse Micro Loans menu" : "Expand Micro Loans menu"}
+                aria-label={microLoansOpen ? "Collapse Micro-Loans menu" : "Expand Micro-Loans menu"}
               >
                 <ChevronDown className={cn("h-4 w-4 transition-transform", microLoansOpen && "rotate-180")} />
               </SidebarMenuAction>

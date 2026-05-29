@@ -11,6 +11,7 @@ import {
   ScanLine,
   ShoppingCart,
   Thermometer,
+  Target,
   TrendingUp,
   Wind,
   Zap,
@@ -117,6 +118,21 @@ export default function DashboardHome() {
           icon: CreditCard,
         };
 
+  const dealMatchAction =
+    role === "farmer_free"
+      ? {
+          title: "Deal Matches",
+          description: "See up to 3 buyer opportunities today from your current listings.",
+          href: "/dashboard/deal-matches",
+          icon: Target,
+        }
+      : {
+          title: "Deal Matches",
+          description: "Real-time buyer opportunity radar with win probability and draft offers.",
+          href: "/dashboard/deal-matches",
+          icon: Target,
+        };
+
   const quickActions = [
     {
       title: "Add New Listing",
@@ -142,6 +158,7 @@ export default function DashboardHome() {
       href: "/dashboard/messages",
       icon: MessageSquare,
     },
+    dealMatchAction,
     financeQuickAction,
   ];
 

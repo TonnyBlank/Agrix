@@ -147,6 +147,38 @@ CREATE TRIGGER update_profiles_updated_at
 BEFORE UPDATE ON public.profiles
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+-- Optional demo guest profile seed.
+-- This only runs if the matching auth user already exists, avoiding FK failures.
+INSERT INTO public.profiles (
+  user_id,
+  full_name,
+  county,
+  farm_size,
+  main_crops,
+  bio,
+  phone,
+  created_at,
+  updated_at
+)
+SELECT
+  '00000000-0000-0000-0000-000000000001'::uuid,
+  'Guest Farmer',
+  'Nairobi',
+  '5 Acres',
+  ARRAY['Maize', 'Beans', 'Coffee'],
+  'Demo account for exploring the AgriLink X platform. This profile is automatically used when logging in via demo mode.',
+  '+254700000000',
+  now(),
+  now()
+WHERE EXISTS (
+  SELECT 1
+  FROM auth.users
+  WHERE id = '00000000-0000-0000-0000-000000000001'::uuid
+)
+ON CONFLICT (user_id) DO UPDATE SET
+  full_name = EXCLUDED.full_name,
+  updated_at = now();
+
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
 
@@ -342,6 +374,7 @@ CREATE TABLE IF NOT EXISTS public.cart_items (
   quantity numeric(10,2) NOT NULL CHECK (quantity > 0),
   unit text NOT NULL,
   notes text,
+  selected_for_checkout boolean NOT NULL DEFAULT true,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT cart_items_buyer_product_unique UNIQUE (buyer_id, product_id)
@@ -407,6 +440,13 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'cart_items' AND column_name = 'selected_for_checkout'
+  ) THEN
+    ALTER TABLE public.cart_items ADD COLUMN selected_for_checkout boolean;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'cart_items' AND column_name = 'created_at'
   ) THEN
     ALTER TABLE public.cart_items ADD COLUMN created_at timestamptz DEFAULT now();
@@ -423,6 +463,7 @@ BEGIN
     ALTER COLUMN id SET DEFAULT gen_random_uuid(),
     ALTER COLUMN quantity SET DEFAULT 1,
     ALTER COLUMN unit SET DEFAULT 'kg',
+    ALTER COLUMN selected_for_checkout SET DEFAULT true,
     ALTER COLUMN created_at SET DEFAULT now(),
     ALTER COLUMN updated_at SET DEFAULT now();
 END $$;
@@ -441,6 +482,7 @@ SET
   END,
   quantity = CASE WHEN quantity IS NULL OR quantity <= 0 THEN 1 ELSE quantity END,
   unit = CASE WHEN unit IS NULL OR btrim(unit) = '' THEN 'kg' ELSE unit END,
+  selected_for_checkout = COALESCE(selected_for_checkout, true),
   created_at = COALESCE(created_at, now()),
   updated_at = COALESCE(updated_at, created_at, now())
 WHERE true;
@@ -549,6 +591,7 @@ BEGIN
     ALTER COLUMN product_id SET NOT NULL,
     ALTER COLUMN quantity SET NOT NULL,
     ALTER COLUMN unit SET NOT NULL,
+    ALTER COLUMN selected_for_checkout SET NOT NULL,
     ALTER COLUMN created_at SET NOT NULL,
     ALTER COLUMN updated_at SET NOT NULL;
 
@@ -573,6 +616,7 @@ BEGIN
 END $$;
 
 CREATE INDEX IF NOT EXISTS cart_items_buyer_created_idx ON public.cart_items (buyer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS cart_items_buyer_selected_idx ON public.cart_items (buyer_id, selected_for_checkout, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS public.subscription_payments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -786,6 +830,139 @@ CREATE TRIGGER subscription_payments_updated_at
 BEFORE UPDATE ON public.subscription_payments
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
+ALTER TABLE public.orders
+  ADD COLUMN IF NOT EXISTS delivery_distance_km numeric(10,2),
+  ADD COLUMN IF NOT EXISTS delivery_base_fee numeric(10,2) NOT NULL DEFAULT 50,
+  ADD COLUMN IF NOT EXISTS delivery_rate_per_km numeric(10,2) NOT NULL DEFAULT 2.5,
+  ADD COLUMN IF NOT EXISTS inter_county_surcharge numeric(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS delivery_mode text NOT NULL DEFAULT 'county_office_pickup',
+  ADD COLUMN IF NOT EXISTS pickup_county text,
+  ADD COLUMN IF NOT EXISTS pickup_office_label text,
+  ADD COLUMN IF NOT EXISTS delivery_disclaimer text,
+  ADD COLUMN IF NOT EXISTS payment_verification_started_at timestamptz,
+  ADD COLUMN IF NOT EXISTS payment_verified_at timestamptz;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'orders_delivery_mode_chk'
+      AND conrelid = 'public.orders'::regclass
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_delivery_mode_chk
+      CHECK (delivery_mode IN ('county_office_pickup'));
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'orders_delivery_distance_non_negative_chk'
+      AND conrelid = 'public.orders'::regclass
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_delivery_distance_non_negative_chk
+      CHECK (delivery_distance_km IS NULL OR delivery_distance_km >= 0);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'orders_delivery_breakdown_non_negative_chk'
+      AND conrelid = 'public.orders'::regclass
+  ) THEN
+    ALTER TABLE public.orders
+      ADD CONSTRAINT orders_delivery_breakdown_non_negative_chk
+      CHECK (delivery_base_fee >= 0 AND delivery_rate_per_km >= 0 AND inter_county_surcharge >= 0);
+  END IF;
+END $$;
+
+UPDATE public.orders o
+SET
+  delivery_base_fee = COALESCE(o.delivery_base_fee, 50),
+  delivery_rate_per_km = COALESCE(o.delivery_rate_per_km, 2.5),
+  inter_county_surcharge = COALESCE(o.inter_county_surcharge, 0),
+  delivery_mode = COALESCE(NULLIF(BTRIM(o.delivery_mode), ''), 'county_office_pickup'),
+  pickup_county = COALESCE(
+    NULLIF(BTRIM(o.pickup_county), ''),
+    (
+      SELECT NULLIF(BTRIM(p.county), '')
+      FROM public.profiles p
+      WHERE p.user_id = o.buyer_id
+      LIMIT 1
+    ),
+    (
+      SELECT NULLIF(BTRIM(p.county), '')
+      FROM public.profiles p
+      WHERE p.user_id = o.farmer_id
+      LIMIT 1
+    )
+  ),
+  pickup_office_label = COALESCE(
+    NULLIF(BTRIM(o.pickup_office_label), ''),
+    CASE
+      WHEN COALESCE(
+        NULLIF(BTRIM(o.pickup_county), ''),
+        (
+          SELECT NULLIF(BTRIM(p.county), '')
+          FROM public.profiles p
+          WHERE p.user_id = o.buyer_id
+          LIMIT 1
+        ),
+        (
+          SELECT NULLIF(BTRIM(p.county), '')
+          FROM public.profiles p
+          WHERE p.user_id = o.farmer_id
+          LIMIT 1
+        )
+      ) IS NOT NULL
+      THEN COALESCE(
+        NULLIF(BTRIM(o.pickup_county), ''),
+        (
+          SELECT NULLIF(BTRIM(p.county), '')
+          FROM public.profiles p
+          WHERE p.user_id = o.buyer_id
+          LIMIT 1
+        ),
+        (
+          SELECT NULLIF(BTRIM(p.county), '')
+          FROM public.profiles p
+          WHERE p.user_id = o.farmer_id
+          LIMIT 1
+        )
+      ) || ' AgriLink County Office'
+      ELSE NULL
+    END
+  ),
+  delivery_disclaimer = COALESCE(
+    NULLIF(BTRIM(o.delivery_disclaimer), ''),
+    'Delivery will be made through your county AgriLink office. Please claim your produce there after payment and official confirmation.'
+  ),
+  payment_verified_at = CASE
+    WHEN o.payment_status = 'paid' THEN COALESCE(o.payment_verified_at, o.paid_at, o.escrow_received_at, o.updated_at, o.created_at)
+    ELSE o.payment_verified_at
+  END
+WHERE true;
+
+ALTER TABLE public.orders
+  ALTER COLUMN delivery_base_fee SET DEFAULT 50,
+  ALTER COLUMN delivery_rate_per_km SET DEFAULT 2.5,
+  ALTER COLUMN inter_county_surcharge SET DEFAULT 0,
+  ALTER COLUMN delivery_mode SET DEFAULT 'county_office_pickup';
+
+ALTER TABLE public.orders
+  ALTER COLUMN delivery_base_fee SET NOT NULL,
+  ALTER COLUMN delivery_rate_per_km SET NOT NULL,
+  ALTER COLUMN inter_county_surcharge SET NOT NULL,
+  ALTER COLUMN delivery_mode SET NOT NULL;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -869,6 +1046,33 @@ BEGIN
     RAISE EXCEPTION 'Order amounts cannot be negative';
   END IF;
 
+  IF NEW.delivery_distance_km IS NOT NULL AND NEW.delivery_distance_km < 0 THEN
+    RAISE EXCEPTION 'Delivery distance cannot be negative';
+  END IF;
+
+  NEW.delivery_base_fee := COALESCE(NEW.delivery_base_fee, 50);
+  NEW.delivery_rate_per_km := COALESCE(NEW.delivery_rate_per_km, 2.5);
+  NEW.inter_county_surcharge := COALESCE(NEW.inter_county_surcharge, 0);
+
+  IF NEW.delivery_mode IS NULL OR BTRIM(NEW.delivery_mode) = '' THEN
+    NEW.delivery_mode := 'county_office_pickup';
+  END IF;
+
+  IF NEW.delivery_mode <> 'county_office_pickup' THEN
+    RAISE EXCEPTION 'Only county office pickup delivery mode is supported';
+  END IF;
+
+  NEW.pickup_county := NULLIF(BTRIM(COALESCE(NEW.pickup_county, '')), '');
+  NEW.pickup_office_label := NULLIF(BTRIM(COALESCE(NEW.pickup_office_label, '')), '');
+
+  IF NEW.pickup_office_label IS NULL AND NEW.pickup_county IS NOT NULL THEN
+    NEW.pickup_office_label := NEW.pickup_county || ' AgriLink County Office';
+  END IF;
+
+  IF NEW.delivery_disclaimer IS NULL OR BTRIM(NEW.delivery_disclaimer) = '' THEN
+    NEW.delivery_disclaimer := 'Delivery will be made through your county AgriLink office. Please claim your produce there after payment and official confirmation.';
+  END IF;
+
   IF NEW.status = 'cancelled' THEN
     NEW.payout_status := 'cancelled';
   ELSIF NEW.payment_status = 'paid' THEN
@@ -897,9 +1101,14 @@ BEGIN
     NEW.buyer_delivery_otp_attempts := 0;
   END IF;
 
+  IF NEW.payment_status IN ('initiated', 'pending_confirmation') THEN
+    NEW.payment_verification_started_at := COALESCE(NEW.payment_verification_started_at, now());
+  END IF;
+
   IF NEW.payment_status = 'paid' THEN
     NEW.paid_at := COALESCE(NEW.paid_at, now());
     NEW.escrow_received_at := COALESCE(NEW.escrow_received_at, NEW.paid_at);
+    NEW.payment_verified_at := COALESCE(NEW.payment_verified_at, NEW.paid_at);
   ELSIF NEW.payout_status = 'released' THEN
     RAISE EXCEPTION 'Released payouts require paid + delivered orders';
   END IF;
@@ -926,12 +1135,14 @@ CREATE TRIGGER orders_consistency_guard
 BEFORE INSERT OR UPDATE ON public.orders
 FOR EACH ROW EXECUTE FUNCTION public.enforce_order_consistency();
 
-CREATE OR REPLACE FUNCTION public.place_marketplace_order(
+CREATE OR REPLACE FUNCTION public.place_marketplace_order_v2(
   p_product_id uuid,
   p_quantity numeric,
-  p_unit text DEFAULT NULL,
-  p_delivery_fee numeric DEFAULT 50,
-  p_notes text DEFAULT NULL
+  p_unit text default null,
+  p_delivery_fee numeric default null,
+  p_notes text default null,
+  p_delivery_distance_km numeric default null,
+  p_pickup_county text default null
 )
 RETURNS SETOF public.orders
 LANGUAGE plpgsql
@@ -947,6 +1158,18 @@ DECLARE
   v_escrow_amount numeric(10,2);
   v_commission_amount numeric(10,2);
   v_seller_payout_amount numeric(10,2);
+  v_buyer_county text;
+  v_farmer_county text;
+  v_same_county boolean := false;
+  v_delivery_distance_km numeric(10,2);
+  v_delivery_base_fee numeric(10,2) := 50;
+  v_delivery_rate_per_km numeric(10,2) := 2.5;
+  v_inter_county_surcharge numeric(10,2) := 0;
+  v_computed_delivery_fee numeric(10,2);
+  v_delivery_fee numeric(10,2);
+  v_pickup_county text;
+  v_pickup_office_label text;
+  v_delivery_disclaimer text := 'Delivery will be made through your county AgriLink office. Please claim your produce there after payment and official confirmation.';
 BEGIN
   IF v_buyer_id IS NULL THEN
     RAISE EXCEPTION 'You must be signed in to place an order';
@@ -954,10 +1177,6 @@ BEGIN
 
   IF p_quantity IS NULL OR p_quantity <= 0 THEN
     RAISE EXCEPTION 'Quantity must be greater than 0';
-  END IF;
-
-  IF p_delivery_fee IS NULL OR p_delivery_fee < 0 THEN
-    RAISE EXCEPTION 'Delivery fee must be 0 or more';
   END IF;
 
   SELECT *
@@ -982,23 +1201,116 @@ BEGIN
     RAISE EXCEPTION 'Only % % available for this product', v_product.stock, v_product.unit;
   END IF;
 
+  SELECT NULLIF(TRIM(county), '')
+  INTO v_buyer_county
+  FROM public.profiles
+  WHERE user_id = v_buyer_id
+  LIMIT 1;
+
+  SELECT NULLIF(TRIM(county), '')
+  INTO v_farmer_county
+  FROM public.profiles
+  WHERE user_id = v_product.farmer_id
+  LIMIT 1;
+
+  v_same_county := (
+    regexp_replace(lower(coalesce(v_buyer_county, '')), '[^a-z0-9]+', '', 'g') <> ''
+    and regexp_replace(lower(coalesce(v_farmer_county, '')), '[^a-z0-9]+', '', 'g') <> ''
+    and regexp_replace(lower(coalesce(v_buyer_county, '')), '[^a-z0-9]+', '', 'g')
+      = regexp_replace(lower(coalesce(v_farmer_county, '')), '[^a-z0-9]+', '', 'g')
+  );
+
+  IF p_delivery_distance_km IS NULL THEN
+    v_delivery_distance_km := CASE WHEN v_same_county THEN 0 ELSE 60 END;
+  ELSE
+    v_delivery_distance_km := GREATEST(ROUND(p_delivery_distance_km::numeric, 2), 0);
+  END IF;
+
+  IF NOT v_same_county THEN
+    v_delivery_distance_km := GREATEST(v_delivery_distance_km, 5);
+    v_inter_county_surcharge := 75;
+  END IF;
+
+  v_computed_delivery_fee := round(
+    least(
+      v_delivery_base_fee
+      + v_inter_county_surcharge
+      + (v_delivery_distance_km * v_delivery_rate_per_km),
+      2500
+    ),
+    2
+  );
+
+  IF p_delivery_fee IS NULL THEN
+    v_delivery_fee := v_computed_delivery_fee;
+  ELSE
+    v_delivery_fee := round(greatest(p_delivery_fee, v_computed_delivery_fee), 2);
+  END IF;
+
+  IF v_delivery_fee < 0 THEN
+    RAISE EXCEPTION 'Delivery fee must be 0 or more';
+  END IF;
+
   v_unit := COALESCE(NULLIF(trim(p_unit), ''), v_product.unit);
   v_subtotal := round(v_product.price_per_unit * p_quantity, 2);
-  v_escrow_amount := round(v_subtotal + p_delivery_fee, 2);
+  v_escrow_amount := round(v_subtotal + v_delivery_fee, 2);
   v_commission_amount := round(v_subtotal * 0.05, 2);
   v_seller_payout_amount := round(greatest(v_subtotal - v_commission_amount, 0), 2);
 
+  v_pickup_county := coalesce(nullif(trim(coalesce(p_pickup_county, '')), ''), v_buyer_county, v_farmer_county);
+  IF v_pickup_county IS NOT NULL THEN
+    v_pickup_office_label := v_pickup_county || ' AgriLink County Office';
+  END IF;
+
   INSERT INTO public.orders (
-    product_id, buyer_id, farmer_id, quantity, unit, total_price,
-    delivery_fee, status, payment_method, notes,
-    escrow_amount, agrilink_commission_rate, agrilink_commission_amount,
-    seller_payout_amount, payout_status
+    product_id,
+    buyer_id,
+    farmer_id,
+    quantity,
+    unit,
+    total_price,
+    delivery_fee,
+    delivery_distance_km,
+    delivery_base_fee,
+    delivery_rate_per_km,
+    inter_county_surcharge,
+    delivery_mode,
+    pickup_county,
+    pickup_office_label,
+    delivery_disclaimer,
+    status,
+    payment_method,
+    notes,
+    escrow_amount,
+    agrilink_commission_rate,
+    agrilink_commission_amount,
+    seller_payout_amount,
+    payout_status
   )
   VALUES (
-    v_product.id, v_buyer_id, v_product.farmer_id, p_quantity, v_unit,
-    v_subtotal, p_delivery_fee, 'pending', 'mpesa',
+    v_product.id,
+    v_buyer_id,
+    v_product.farmer_id,
+    p_quantity,
+    v_unit,
+    v_subtotal,
+    v_delivery_fee,
+    v_delivery_distance_km,
+    v_delivery_base_fee,
+    v_delivery_rate_per_km,
+    v_inter_county_surcharge,
+    'county_office_pickup',
+    v_pickup_county,
+    v_pickup_office_label,
+    v_delivery_disclaimer,
+    'pending',
+    'mpesa',
     NULLIF(trim(COALESCE(p_notes, '')), ''),
-    v_escrow_amount, 0.05, v_commission_amount, v_seller_payout_amount, 'pending_payment'
+    v_escrow_amount,
+    0.05,
+    v_commission_amount,
+    v_seller_payout_amount,
+    'pending_payment'
   )
   RETURNING * INTO v_order;
 
@@ -1013,7 +1325,35 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.place_marketplace_order(
+  p_product_id uuid,
+  p_quantity numeric,
+  p_unit text DEFAULT NULL,
+  p_delivery_fee numeric DEFAULT 50,
+  p_notes text DEFAULT NULL
+)
+RETURNS SETOF public.orders
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT *
+  FROM public.place_marketplace_order_v2(
+    p_product_id => p_product_id,
+    p_quantity => p_quantity,
+    p_unit => p_unit,
+    p_delivery_fee => p_delivery_fee,
+    p_notes => p_notes,
+    p_delivery_distance_km => NULL,
+    p_pickup_county => NULL
+  );
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION public.place_marketplace_order(uuid, numeric, text, numeric, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.place_marketplace_order_v2(uuid, numeric, text, numeric, text, numeric, text) TO authenticated;
 
 -- ----------------------------------------------------------------
 -- Micro-loans
@@ -2016,6 +2356,53 @@ FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 DROP TRIGGER IF EXISTS update_company_procurement_responses_updated_at ON public.company_procurement_responses;
 CREATE TRIGGER update_company_procurement_responses_updated_at
 BEFORE UPDATE ON public.company_procurement_responses
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+CREATE TABLE IF NOT EXISTS public.farmer_deal_match_settings (
+  user_id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  realtime_alerts_enabled boolean NOT NULL DEFAULT true,
+  min_margin_percent numeric(5,2) NOT NULL DEFAULT 8
+    CHECK (min_margin_percent >= 0 AND min_margin_percent <= 35),
+  free_unlocked_on date,
+  free_unlocked_request_ids jsonb NOT NULL DEFAULT '[]'::jsonb
+    CHECK (jsonb_typeof(free_unlocked_request_ids) = 'array'),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_farmer_deal_match_settings_updated_at
+  ON public.farmer_deal_match_settings(updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_company_procurement_requests_status_created_at
+  ON public.company_procurement_requests(status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_company_procurement_requests_target_county
+  ON public.company_procurement_requests(target_county);
+
+CREATE INDEX IF NOT EXISTS idx_products_farmer_available_category
+  ON public.products(farmer_id, is_available, category);
+
+ALTER TABLE public.farmer_deal_match_settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "farmer_deal_match_settings_owner_read" ON public.farmer_deal_match_settings;
+CREATE POLICY "farmer_deal_match_settings_owner_read"
+ON public.farmer_deal_match_settings FOR SELECT
+USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "farmer_deal_match_settings_owner_insert" ON public.farmer_deal_match_settings;
+CREATE POLICY "farmer_deal_match_settings_owner_insert"
+ON public.farmer_deal_match_settings FOR INSERT
+WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "farmer_deal_match_settings_owner_update" ON public.farmer_deal_match_settings;
+CREATE POLICY "farmer_deal_match_settings_owner_update"
+ON public.farmer_deal_match_settings FOR UPDATE
+USING (user_id = auth.uid())
+WITH CHECK (user_id = auth.uid());
+
+DROP TRIGGER IF EXISTS update_farmer_deal_match_settings_updated_at ON public.farmer_deal_match_settings;
+CREATE TRIGGER update_farmer_deal_match_settings_updated_at
+BEFORE UPDATE ON public.farmer_deal_match_settings
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 CREATE OR REPLACE FUNCTION public.sync_company_role_from_company_record()

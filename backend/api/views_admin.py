@@ -16,6 +16,8 @@ from .common import (
     require_auth,
     resolve_app_role,
     set_user_role_with_plan,
+    write_user_notification,
+    write_user_notifications,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 from .views_core import attach_order_meta, release_order_payout
@@ -29,6 +31,7 @@ from .views_loans import (
 
 
 BRANCH_DISBURSEMENT_READY_STATUSES = {"documents_received", "verified", "waived"}
+APP_ROLE_SET = {"farmer_free", "farmer_pro", "company", "admin"}
 
 
 def clean_optional_text(value) -> str | None:
@@ -51,6 +54,64 @@ def ensure_admin(request: HttpRequest):
 def admin_count_rows(admin, table: str, filters: dict[str, str] | None = None) -> int:
     _, count = admin.select(table, select="id", filters=filters or {}, head=True, count="exact")
     return int(count or 0)
+
+
+def write_admin_audit_event(
+    admin,
+    *,
+    actor_user_id: str,
+    action: str,
+    entity_type: str,
+    entity_id: str | None = None,
+    summary: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    try:
+        admin.insert(
+            "admin_audit_logs",
+            {
+                "actor_user_id": actor_user_id,
+                "action": action,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "summary": summary,
+                "metadata": metadata or {},
+                "created_at": now_iso(),
+            },
+        )
+    except Exception:
+        # Audit logging should never block the primary admin operation.
+        return
+
+
+def notify_order_parties(
+    admin,
+    *,
+    order: dict,
+    title: str,
+    message: str,
+    priority: str = "medium",
+    category: str = "update",
+    action_url: str = "/dashboard/orders",
+    source_user_id: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    buyer_id = str(order.get("buyer_id") or "").strip()
+    farmer_id = str(order.get("farmer_id") or "").strip()
+    write_user_notifications(
+        admin,
+        user_ids=[buyer_id, farmer_id],
+        title=title,
+        message=message,
+        priority=priority,
+        category=category,
+        entity_type="order",
+        entity_id=str(order.get("id") or "").strip() or None,
+        action_url=action_url,
+        source="admin",
+        source_user_id=source_user_id,
+        metadata=metadata or {},
+    )
 
 
 @api_view
@@ -295,10 +356,36 @@ def admin_user_role(request: HttpRequest, user_id: str):
     if request.method != "PATCH":
         return method_not_allowed(["PATCH"])
     ensure_admin(request)
+    admin = admin_client()
     next_role = parse_json_body(request).get("role")
-    if next_role not in {"farmer_free", "farmer_pro", "company", "admin"}:
+    if next_role not in APP_ROLE_SET:
         raise ApiException("Invalid role", 400)
+    role_rows, _ = admin.select("user_roles", select="role", filters={"user_id": f"eq.{user_id}"})
+    previous_role = sorted({str(row.get("role") or "farmer_free") for row in role_rows or []})[0] if role_rows else "farmer_free"
     updated_profile = set_user_role_with_plan(user_id, next_role)
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.user_role.updated",
+        entity_type="user",
+        entity_id=user_id,
+        summary=f"Changed user role from {previous_role} to {next_role}.",
+        metadata={"previous_role": previous_role, "next_role": next_role},
+    )
+    write_user_notification(
+        admin,
+        user_id=user_id,
+        title="Account role updated",
+        message=f"Your AgriLink role was updated from {previous_role} to {next_role}.",
+        priority="high",
+        category="update",
+        entity_type="user",
+        entity_id=user_id,
+        action_url="/dashboard/profile",
+        source="admin",
+        source_user_id=request.user_id,
+        metadata={"previous_role": previous_role, "next_role": next_role},
+    )
     return JsonResponse(
         {
             "user_id": user_id,
@@ -340,6 +427,33 @@ def admin_order_release(request: HttpRequest, order_id: str):
         allow_admin_override=True,
         override_reason=override_reason,
     )
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.order.release",
+        entity_type="order",
+        entity_id=order_id,
+        summary="Released seller payout for marketplace order.",
+        metadata={
+            "override_reason": override_reason,
+            "official_note": official_note,
+            "previous_payout_status": order.get("payout_status"),
+            "next_payout_status": released.get("payout_status"),
+        },
+    )
+    notify_order_parties(
+        admin,
+        order=released,
+        title="Order payout released",
+        message="AgriLink has released payout for a delivered order after official sign-off.",
+        priority="high",
+        category="update",
+        source_user_id=request.user_id,
+        metadata={
+            "payout_status": released.get("payout_status"),
+            "delivery_signoff_status": released.get("delivery_signoff_status"),
+        },
+    )
     return JsonResponse(attach_order_meta(admin, [released])[0])
 
 
@@ -376,6 +490,33 @@ def admin_order_confirm_delivery(request: HttpRequest, order_id: str):
         },
         filters={"id": f"eq.{order_id}"},
         single=True,
+    )
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.order.confirm_delivery",
+        entity_type="order",
+        entity_id=order_id,
+        summary="Marked order as officially delivered.",
+        metadata={
+            "official_note": official_note,
+            "previous_status": order.get("status"),
+            "next_status": updated.get("status"),
+            "next_delivery_signoff_status": updated.get("delivery_signoff_status"),
+        },
+    )
+    notify_order_parties(
+        admin,
+        order=updated,
+        title="Order officially marked delivered",
+        message="An AgriLink admin confirmed delivery and updated this order to delivered.",
+        priority="high",
+        category="update",
+        source_user_id=request.user_id,
+        metadata={
+            "status": updated.get("status"),
+            "delivery_signoff_status": updated.get("delivery_signoff_status"),
+        },
     )
 
     return JsonResponse(attach_order_meta(admin, [updated])[0])
@@ -435,6 +576,36 @@ def admin_order_resolve_dispute(request: HttpRequest, order_id: str):
             allow_admin_override=True,
             override_reason=resolution_note if resolution == "waive" else None,
         )
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.order.resolve_dispute",
+        entity_type="order",
+        entity_id=order_id,
+        summary=f"Resolved order dispute with '{resolution}' decision.",
+        metadata={
+            "resolution": resolution,
+            "resolution_note": resolution_note,
+            "release_now": bool(body.get("release_now")),
+            "next_delivery_signoff_status": updated.get("delivery_signoff_status"),
+            "next_payout_status": updated.get("payout_status"),
+        },
+    )
+    notify_order_parties(
+        admin,
+        order=updated,
+        title="Order dispute resolved",
+        message=f"An AgriLink admin resolved this order dispute with a '{resolution}' decision.",
+        priority="high",
+        category="update",
+        source_user_id=request.user_id,
+        metadata={
+            "resolution": resolution,
+            "release_now": bool(body.get("release_now")),
+            "delivery_signoff_status": updated.get("delivery_signoff_status"),
+            "payout_status": updated.get("payout_status"),
+        },
+    )
 
     return JsonResponse(attach_order_meta(admin, [updated])[0])
 
@@ -547,6 +718,21 @@ def admin_loan_offers(request: HttpRequest):
         },
         single=True,
     )
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.loan_offer.created",
+        entity_type="loan_offer",
+        entity_id=created.get("id"),
+        summary="Created a new loan offer.",
+        metadata={
+            "applicant_role": created.get("applicant_role"),
+            "product_type": created.get("product_type"),
+            "security_type": created.get("security_type"),
+            "target_county": created.get("target_county"),
+            "is_active": created.get("is_active"),
+        },
+    )
     return JsonResponse(created, status=201)
 
 
@@ -610,9 +796,32 @@ def admin_loan_offer_detail(request: HttpRequest, offer_id: str):
         if next_security_type == "collateral" and not next_collateral_types:
             raise ApiException("Secured collateral offers must list at least one accepted collateral type.", 400)
         updated = admin.update("micro_loan_offers", updates, filters={"id": f"eq.{offer_id}"}, single=True)
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.loan_offer.updated",
+            entity_type="loan_offer",
+            entity_id=offer_id,
+            summary="Updated loan offer details.",
+            metadata={"changed_fields": sorted(k for k in updates.keys() if k != "updated_at")},
+        )
         return JsonResponse(updated)
     if request.method == "DELETE":
+        existing, _ = admin.select("micro_loan_offers", filters={"id": f"eq.{offer_id}"}, single=True)
         admin.delete("micro_loan_offers", filters={"id": f"eq.{offer_id}"})
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.loan_offer.deleted",
+            entity_type="loan_offer",
+            entity_id=offer_id,
+            summary="Deleted loan offer.",
+            metadata={
+                "applicant_role": (existing or {}).get("applicant_role"),
+                "product_type": (existing or {}).get("product_type"),
+                "target_county": (existing or {}).get("target_county"),
+            },
+        )
         return HttpResponse(status=204)
     return method_not_allowed(["PATCH", "DELETE"])
 
@@ -711,6 +920,38 @@ def admin_loans(request: HttpRequest):
         },
         single=True,
     )
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.loan_application.created",
+        entity_type="loan_application",
+        entity_id=created.get("id"),
+        summary="Created loan application record from admin workspace.",
+        metadata={
+            "user_id": created.get("user_id"),
+            "status": created.get("status"),
+            "security_type": created.get("security_type"),
+            "requires_branch_visit": created.get("requires_branch_visit"),
+        },
+    )
+    write_user_notification(
+        admin,
+        user_id=str(created.get("user_id") or "").strip() or None,
+        title="Loan application created",
+        message=f"An admin created a loan application record for '{created.get('product_title') or 'your loan'}'.",
+        priority="high",
+        category="update",
+        entity_type="loan_application",
+        entity_id=str(created.get("id") or "").strip() or None,
+        action_url="/dashboard/micro-loans",
+        source="admin",
+        source_user_id=request.user_id,
+        metadata={
+            "status": created.get("status"),
+            "requested_amount": created.get("requested_amount"),
+            "approved_amount": created.get("approved_amount"),
+        },
+    )
     return JsonResponse({**created, "profile": profile}, status=201)
 
 
@@ -726,6 +967,7 @@ def admin_loan_detail(request: HttpRequest, loan_id: str):
         existing, _ = admin.select("micro_loan_applications", filters={"id": f"eq.{loan_id}"}, single=True)
         if not existing:
             raise ApiException("Loan application not found.", 404)
+        previous_status = str(existing.get("status") or "").strip() or "pending_review"
         updates = {"updated_at": now_iso()}
         for key in ["status", "note"]:
             if key in body:
@@ -780,9 +1022,69 @@ def admin_loan_detail(request: HttpRequest, loan_id: str):
         if len(updates) > 1:
             updates["reviewed_at"] = now_iso()
         updated = admin.update("micro_loan_applications", updates, filters={"id": f"eq.{loan_id}"}, single=True)
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.loan_application.updated",
+            entity_type="loan_application",
+            entity_id=loan_id,
+            summary="Updated loan application decision/details.",
+            metadata={
+                "changed_fields": sorted(k for k in updates.keys() if k not in {"updated_at", "reviewed_at"}),
+                "next_status": updated.get("status"),
+            },
+        )
+        next_status = str(updated.get("status") or "").strip() or previous_status
+        status_message = (
+            f"Your loan status changed from {previous_status} to {next_status}."
+            if next_status != previous_status
+            else f"Your loan application was updated and remains {next_status}."
+        )
+        write_user_notification(
+            admin,
+            user_id=str(updated.get("user_id") or existing.get("user_id") or "").strip() or None,
+            title="Loan application updated",
+            message=status_message,
+            priority="high" if next_status in {"approved", "disbursed", "rejected", "repaid"} else "medium",
+            category="update",
+            entity_type="loan_application",
+            entity_id=loan_id,
+            action_url="/dashboard/micro-loans",
+            source="admin",
+            source_user_id=request.user_id,
+            metadata={
+                "previous_status": previous_status,
+                "next_status": next_status,
+                "changed_fields": sorted(k for k in updates.keys() if k not in {"updated_at", "reviewed_at"}),
+            },
+        )
         return JsonResponse(updated)
     if request.method == "DELETE":
+        existing, _ = admin.select("micro_loan_applications", filters={"id": f"eq.{loan_id}"}, single=True)
         admin.delete("micro_loan_applications", filters={"id": f"eq.{loan_id}"})
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.loan_application.deleted",
+            entity_type="loan_application",
+            entity_id=loan_id,
+            summary="Deleted loan application.",
+            metadata={"status": (existing or {}).get("status"), "user_id": (existing or {}).get("user_id")},
+        )
+        write_user_notification(
+            admin,
+            user_id=str((existing or {}).get("user_id") or "").strip() or None,
+            title="Loan application removed",
+            message="An admin removed one of your loan application records.",
+            priority="medium",
+            category="info",
+            entity_type="loan_application",
+            entity_id=loan_id,
+            action_url="/dashboard/micro-loans",
+            source="admin",
+            source_user_id=request.user_id,
+            metadata={"status": (existing or {}).get("status")},
+        )
         return HttpResponse(status=204)
     return method_not_allowed(["PATCH", "DELETE"])
 
@@ -813,8 +1115,99 @@ def admin_verification_detail(request: HttpRequest, verification_id: str):
         updates["status"] = body["status"]
     if "reviewer_note" in body:
         updates["reviewer_note"] = body["reviewer_note"]
-    updated = admin_client().update("id_verifications", updates, filters={"id": f"eq.{verification_id}"}, single=True)
+    admin = admin_client()
+    updated = admin.update("id_verifications", updates, filters={"id": f"eq.{verification_id}"}, single=True)
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.verification.updated",
+        entity_type="id_verification",
+        entity_id=verification_id,
+        summary="Updated identity verification status/reviewer note.",
+        metadata={"status": updated.get("status"), "user_id": updated.get("user_id")},
+    )
+    next_status = str(updated.get("status") or "").strip() or "pending_review"
+    write_user_notification(
+        admin,
+        user_id=str(updated.get("user_id") or "").strip() or None,
+        title="ID verification updated",
+        message=f"Your identity verification status is now '{next_status}'.",
+        priority="high" if next_status in {"verified", "rejected"} else "medium",
+        category="update",
+        entity_type="id_verification",
+        entity_id=verification_id,
+        action_url="/dashboard/profile",
+        source="admin",
+        source_user_id=request.user_id,
+        metadata={"status": next_status},
+    )
     return JsonResponse(updated)
+
+
+@api_view
+@require_auth
+def admin_feature_flags(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    ensure_admin(request)
+    flags, _ = admin_client().select("feature_flags", order="feature_key.asc")
+    rows = []
+    for row in flags or []:
+        enabled_for = [str(value) for value in (row.get("enabled_for") or []) if str(value) in APP_ROLE_SET]
+        rows.append({**row, "enabled_for": sorted(enabled_for)})
+    return JsonResponse(rows, safe=False)
+
+
+@api_view
+@require_auth
+def admin_feature_flag_detail(request: HttpRequest, feature_key: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+    ensure_admin(request)
+    body = parse_json_body(request)
+    if "enabled_for" not in body or not isinstance(body.get("enabled_for"), list):
+        raise ApiException("enabled_for must be provided as an array of roles.", 400)
+    enabled_for = sorted({str(role) for role in body.get("enabled_for") if str(role) in APP_ROLE_SET})
+    admin = admin_client()
+    updated = admin.update(
+        "feature_flags",
+        {"enabled_for": enabled_for},
+        filters={"feature_key": f"eq.{feature_key}"},
+        single=True,
+    )
+    if not updated:
+        raise ApiException("Feature flag not found.", 404)
+    write_admin_audit_event(
+        admin,
+        actor_user_id=request.user_id,
+        action="admin.feature_flag.updated",
+        entity_type="feature_flag",
+        entity_id=feature_key,
+        summary=f"Updated feature flag audience for '{feature_key}'.",
+        metadata={"enabled_for": enabled_for},
+    )
+    return JsonResponse({**updated, "enabled_for": enabled_for})
+
+
+@api_view
+@require_auth
+def admin_audit_logs(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    ensure_admin(request)
+    logs, _ = admin_client().select(
+        "admin_audit_logs",
+        select="id, actor_user_id, action, entity_type, entity_id, summary, metadata, created_at",
+        order="created_at.desc",
+        limit=200,
+    )
+    actor_ids = sorted({row.get("actor_user_id") for row in (logs or []) if row.get("actor_user_id")})
+    profiles = load_profiles_by_user_ids(admin_client(), actor_ids, "user_id, full_name")
+    rows = []
+    for row in logs or []:
+        actor = profiles.get(row.get("actor_user_id"), {}) if row.get("actor_user_id") else {}
+        rows.append({**row, "actor_profile": actor or None})
+    return JsonResponse(rows, safe=False)
 
 
 @api_view

@@ -2,23 +2,25 @@ from __future__ import annotations
 
 import ipaddress
 import os
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse
 
 
 class SimpleCorsMiddleware:
-    def __init__(self, get_response):
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]):
         self.get_response = get_response
         configured_origins = os.getenv("CLIENT_ORIGIN", "")
         self.allowed_origins = [origin.strip() for origin in configured_origins.split(",") if origin.strip()]
         debug_flag = os.getenv("DEBUG") or os.getenv("DJANGO_DEBUG", "")
         self.debug_allow_request_origin = debug_flag.lower() == "true"
 
-    def __call__(self, request):
+    def __call__(self, request: HttpRequest) -> HttpResponse:
         response = HttpResponse(status=204) if request.method == "OPTIONS" else self.get_response(request)
+        request_origin = request.headers.get("Origin") if hasattr(request, "headers") else request.META.get("HTTP_ORIGIN")
 
-        allowed_origin = self._resolve_origin(request.headers.get("Origin"))
+        allowed_origin = self._resolve_origin(request_origin)
         if allowed_origin:
             response["Access-Control-Allow-Origin"] = allowed_origin
             self._append_vary_header(response, "Origin")
@@ -30,18 +32,16 @@ class SimpleCorsMiddleware:
 
         return response
 
-    def _resolve_origin(self, origin: str | None) -> str:
+    def _resolve_origin(self, origin: Optional[str]) -> Optional[str]:
         if origin and (self.debug_allow_request_origin or self._is_local_origin(origin)):
             return origin
 
         if self.allowed_origins:
-            if not origin:
-                return self.allowed_origins[0]
             if "*" in self.allowed_origins:
-                return origin
+                return origin or "*"
             if origin in self.allowed_origins:
                 return origin
-            return self.allowed_origins[0]
+            return None
 
         return origin or "*"
 

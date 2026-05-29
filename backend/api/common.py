@@ -1,6 +1,7 @@
 import base64
 import ipaddress
 import json
+import logging
 import math
 import os
 from datetime import datetime, timedelta
@@ -34,6 +35,10 @@ LOAN_BRANCH_VISIT_STATUSES = (
     "verified",
     "waived",
 )
+NOTIFICATION_PRIORITY_LEVELS = {"high", "medium", "low"}
+NOTIFICATION_CATEGORIES = {"action", "update", "info"}
+
+logger = logging.getLogger(__name__)
 
 
 class ApiException(Exception):
@@ -78,6 +83,87 @@ def method_not_allowed(allowed: list[str]) -> HttpResponse:
 
 def now_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def write_user_notification(
+    client: "SupabaseClient",
+    *,
+    user_id: str | None,
+    title: str,
+    message: str,
+    priority: str = "medium",
+    category: str = "update",
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    action_url: str | None = None,
+    source: str = "system",
+    source_user_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    target_user = str(user_id or "").strip()
+    clean_title = str(title or "").strip()
+    clean_message = str(message or "").strip()
+    if not target_user or not clean_title or not clean_message:
+        return
+
+    next_priority = str(priority or "medium").strip().lower()
+    if next_priority not in NOTIFICATION_PRIORITY_LEVELS:
+        next_priority = "medium"
+
+    next_category = str(category or "update").strip().lower()
+    if next_category not in NOTIFICATION_CATEGORIES:
+        next_category = "update"
+
+    payload = {
+        "user_id": target_user,
+        "source": str(source or "system").strip() or "system",
+        "source_user_id": source_user_id,
+        "title": clean_title,
+        "message": clean_message,
+        "priority": next_priority,
+        "category": next_category,
+        "entity_type": str(entity_type or "").strip() or None,
+        "entity_id": str(entity_id or "").strip() or None,
+        "action_url": str(action_url or "").strip() or None,
+        "metadata": metadata if isinstance(metadata, dict) else {},
+        "created_at": now_iso(),
+    }
+    try:
+        client.insert("user_notifications", payload, single=True)
+    except Exception as exc:
+        logger.warning("Failed to write user notification: %s", exc)
+
+
+def write_user_notifications(
+    client: "SupabaseClient",
+    *,
+    user_ids: list[str],
+    title: str,
+    message: str,
+    priority: str = "medium",
+    category: str = "update",
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    action_url: str | None = None,
+    source: str = "system",
+    source_user_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    for user_id in sorted({str(item or "").strip() for item in user_ids if str(item or "").strip()}):
+        write_user_notification(
+            client,
+            user_id=user_id,
+            title=title,
+            message=message,
+            priority=priority,
+            category=category,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            action_url=action_url,
+            source=source,
+            source_user_id=source_user_id,
+            metadata=metadata,
+        )
 
 
 def build_safe_storage_path(user_id: str, original_name: str) -> str:

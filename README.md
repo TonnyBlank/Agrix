@@ -24,6 +24,7 @@ Core capabilities include:
 - ID verification and admin approval flows
 - micro-loans with readiness checks, security requirements, repayment tracking, and branch review
 - company onboarding, procurement publishing, farmer partnerships, and company order tracking
+- deal match engine for farmers with opportunity scoring, draft offers, and plan-aware Free/Pro behavior
 - admin dashboards for users, companies, financing, transactions, and verification
 - AI crop scanning with Gemini support and fallback diagnostics when Gemini is unavailable
 
@@ -151,6 +152,42 @@ Related features around discovery:
 - public farmer profile view
 - farmer search by name/county/farm size
 - company procurement discovery for farmers
+- `Deal Matches` opportunity radar:
+  - Free: up to 3 unlocked matches per day
+  - Pro: real-time polling, win probability scoring, and adjustable margin guard
+  - one-click draft-to-offer submission into procurement responses
+  - organized as in-page tabs:
+    - `Buyer Matches` for opportunities and offer submission
+    - `Market Watchlist` for target-price tracking (no standalone Price Watch page)
+
+#### How Deal Matches Works
+
+`Deal Matches` is a buyer-opportunity engine for farmers.
+
+It continuously checks open company procurement requests and compares them with the farmer's active listings, then ranks opportunities by fit score.
+
+Match score signals include:
+
+- product/category text relevance
+- stock coverage against requested quantity
+- county alignment with target county
+- budget alignment
+- urgency and current competition level
+
+For each top match, the system prepares:
+
+- a recommended product from the farmer catalog
+- a suggested quantity
+- a suggested price range
+- a ready draft offer that can be submitted directly
+- an in-page watchlist tab for target-price alerts and live market comparisons
+
+Free vs Pro behavior:
+
+- `farmer_free`: sees a limited number of unlocked matches per day
+- `farmer_pro`: gets continuous refresh, win-probability hints, and margin guard controls to reduce underpricing risk
+
+When a farmer submits the draft offer, it is posted into the same procurement response workflow used by company procurement review and accept/reject decisions.
 
 ### 5. AI Crop Scanner
 

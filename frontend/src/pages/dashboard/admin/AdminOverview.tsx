@@ -179,6 +179,10 @@ export default function AdminOverview() {
                 { to: "/dashboard/admin/loans", title: "Loan Analytics", detail: "Publish and manage live loan offers for borrowers.", tone: "emerald" as const },
                 { to: "/dashboard/admin/loan-decisions", title: "Loan Decisions", detail: "Review applications and make final loan decisions.", tone: "violet" as const },
                 { to: "/dashboard/admin/transactions", title: "Transactions", detail: "Search by receipt, product, buyer, farmer, or payment status.", tone: "sky" as const },
+                { to: "/dashboard/admin/disputes", title: "Disputes", detail: "Track open disputes, SLA deadlines, and payout blockers.", tone: "rose" as const },
+                { to: "/dashboard/admin/verifications", title: "Verifications", detail: "Process ID review queue with approve/reject actions.", tone: "amber" as const },
+                { to: "/dashboard/admin/feature-flags", title: "Feature Flags", detail: "Control role-level access to product capabilities.", tone: "slate" as const },
+                { to: "/dashboard/admin/audit-logs", title: "Audit Logs", detail: "Trace role, loan, payout, and moderation changes.", tone: "rose" as const },
                 { to: "/dashboard/admin/users", title: "User Roles", detail: "Update roles and keep admin permissions under control.", tone: "amber" as const },
               ].map((item) => {
                 const tone = adminTone(item.tone);

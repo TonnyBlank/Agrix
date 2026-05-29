@@ -210,3 +210,71 @@ def id_verification_upload(request: HttpRequest):
         on_conflict="user_id",
     )
     return JsonResponse(created, status=201)
+
+
+@api_view
+@require_auth
+def notifications_root(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+
+    limit_raw = str(request.GET.get("limit") or "").strip()
+    unread_only_raw = str(request.GET.get("unread_only") or "").strip().lower()
+    try:
+        limit = int(limit_raw) if limit_raw else 80
+    except ValueError:
+        raise ApiException("limit must be a valid integer.", 400)
+    limit = max(1, min(limit, 200))
+
+    filters = {"user_id": f"eq.{request.user_id}"}
+    if unread_only_raw in {"1", "true", "yes"}:
+        filters["read_at"] = "is.null"
+
+    rows, _ = request.supabase.select(
+        "user_notifications",
+        select="id, user_id, source, source_user_id, title, message, priority, category, entity_type, entity_id, action_url, metadata, read_at, created_at",
+        filters=filters,
+        order="created_at.desc",
+        limit=limit,
+    )
+    return JsonResponse(rows or [], safe=False)
+
+
+@api_view
+@require_auth
+def notification_mark_read(request: HttpRequest, notification_id: str):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+
+    existing, _ = request.supabase.select(
+        "user_notifications",
+        select="id, user_id, read_at",
+        filters={"id": f"eq.{notification_id}", "user_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not existing:
+        raise ApiException("Notification not found.", 404)
+    if existing.get("read_at"):
+        return JsonResponse(existing)
+
+    updated = request.supabase.update(
+        "user_notifications",
+        {"read_at": now_iso()},
+        filters={"id": f"eq.{notification_id}", "user_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    return JsonResponse(updated)
+
+
+@api_view
+@require_auth
+def notifications_mark_all_read(request: HttpRequest):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+
+    updated = request.supabase.update(
+        "user_notifications",
+        {"read_at": now_iso()},
+        filters={"user_id": f"eq.{request.user_id}", "read_at": "is.null"},
+    )
+    return JsonResponse({"updated": len(updated or [])})

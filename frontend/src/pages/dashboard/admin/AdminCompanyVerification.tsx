@@ -27,6 +27,8 @@ function formatCompanyType(companyType: string) {
     .join(" ");
 }
 
+const statusFilters = ["pending", "approved", "rejected", "all"] as const;
+
 export default function AdminCompanyVerification() {
   const [companies, setCompanies] = useState<CompanyRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -142,10 +144,10 @@ export default function AdminCompanyVerification() {
             </div>
           </div>
           <div className="flex gap-2">
-            {["pending", "approved", "rejected", "all"].map((f) => (
+            {statusFilters.map((f) => (
               <button
                 key={f}
-                onClick={() => setFilter(f as any)}
+                onClick={() => setFilter(f)}
                 className={`px-4 py-2 rounded-lg font-medium transition-colors ${
                   filter === f
                     ? "bg-primary text-primary-foreground"

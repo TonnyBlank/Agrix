@@ -41,11 +41,16 @@ import CompanyProfileSettings from "./pages/dashboard/CompanyProfileSettings";
 import NotificationsCenter from "./pages/dashboard/NotificationsCenter";
 import ActivityTimeline from "./pages/dashboard/ActivityTimeline";
 import DiscoveryHub from "./pages/dashboard/DiscoveryHub";
+import DealMatches from "./pages/dashboard/DealMatches";
 import AdminLoans from "./pages/dashboard/admin/AdminLoans";
 import AdminLoanDecisions from "./pages/dashboard/admin/AdminLoanDecisions";
 import AdminTransactions from "./pages/dashboard/admin/AdminTransactions";
 import AdminUsers from "./pages/dashboard/admin/AdminUsers";
 import AdminCompanyVerification from "./pages/dashboard/admin/AdminCompanyVerification";
+import AdminVerifications from "./pages/dashboard/admin/AdminVerifications";
+import AdminFeatureFlags from "./pages/dashboard/admin/AdminFeatureFlags";
+import AdminAuditLogs from "./pages/dashboard/admin/AdminAuditLogs";
+import AdminDisputes from "./pages/dashboard/admin/AdminDisputes";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -95,8 +100,12 @@ const App = () => (
             <Route path="/dashboard/admin/loans" element={<ProtectedRoute allowedRoles={["admin"]}><AdminLoans /></ProtectedRoute>} />
             <Route path="/dashboard/admin/loan-decisions" element={<ProtectedRoute allowedRoles={["admin"]}><AdminLoanDecisions /></ProtectedRoute>} />
             <Route path="/dashboard/admin/transactions" element={<ProtectedRoute allowedRoles={["admin"]}><AdminTransactions /></ProtectedRoute>} />
+            <Route path="/dashboard/admin/disputes" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDisputes /></ProtectedRoute>} />
             <Route path="/dashboard/admin/users" element={<ProtectedRoute allowedRoles={["admin"]}><AdminUsers /></ProtectedRoute>} />
             <Route path="/dashboard/admin/companies" element={<ProtectedRoute allowedRoles={["admin"]}><AdminCompanyVerification /></ProtectedRoute>} />
+            <Route path="/dashboard/admin/verifications" element={<ProtectedRoute allowedRoles={["admin"]}><AdminVerifications /></ProtectedRoute>} />
+            <Route path="/dashboard/admin/feature-flags" element={<ProtectedRoute allowedRoles={["admin"]}><AdminFeatureFlags /></ProtectedRoute>} />
+            <Route path="/dashboard/admin/audit-logs" element={<ProtectedRoute allowedRoles={["admin"]}><AdminAuditLogs /></ProtectedRoute>} />
             <Route path="/dashboard/free" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><DashboardHome /></ProtectedRoute>} />
             <Route path="/dashboard/pro" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><DashboardHome /></ProtectedRoute>} />
             <Route path="/dashboard/enterprise" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><LegacyEnterpriseRedirect /></ProtectedRoute>} />
@@ -110,6 +119,7 @@ const App = () => (
             <Route path="/dashboard/orders" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Orders /></ProtectedRoute>} />
             <Route path="/dashboard/ai-scanner" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><AIScanner /></ProtectedRoute>} />
             <Route path="/dashboard/calendar" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><CropCalendar /></ProtectedRoute>} />
+            <Route path="/dashboard/deal-matches" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><DealMatches /></ProtectedRoute>} />
             <Route path="/dashboard/community" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Community /></ProtectedRoute>} />
             <Route path="/dashboard/messages" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Messages /></ProtectedRoute>} />
             <Route path="/dashboard/micro-loans" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MicroLoans /></ProtectedRoute>} />

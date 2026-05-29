@@ -280,6 +280,48 @@ export type AdminAnalytics = {
   topCrop: { crop: string; orders: number; quantity: number; revenue: number } | null;
 };
 
+export type AdminVerification = {
+  id: string;
+  user_id: string;
+  status: "unverified" | "pending" | "pending_review" | "verified" | "rejected";
+  reviewer_note: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  front_doc_url: string | null;
+  back_doc_url: string | null;
+  doc_url: string | null;
+  created_at: string;
+  profile: {
+    user_id: string;
+    full_name: string | null;
+    county: string | null;
+    phone: string | null;
+  } | null;
+};
+
+export type AdminFeatureFlag = {
+  id: string;
+  feature_key: string;
+  enabled_for: AppRole[];
+  description: string | null;
+  created_at: string;
+};
+
+export type AdminAuditLog = {
+  id: string;
+  actor_user_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  summary: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  actor_profile: {
+    user_id: string;
+    full_name: string | null;
+  } | null;
+};
+
 export type LoanOfferFormState = {
   applicant_role: LoanRole;
   product_type: LoanProductType;

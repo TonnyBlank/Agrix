@@ -22,6 +22,7 @@ from .common import (
     normalize_kenyan_phone,
     method_not_allowed,
     now_iso,
+    write_user_notification,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 
@@ -92,6 +93,10 @@ def _parse_non_negative_number(value: Any, field_label: str, *, allow_zero: bool
 PROCUREMENT_REQUEST_STATUSES = {"open", "paused", "closed"}
 PROCUREMENT_RESPONSE_STATUSES = {"submitted", "accepted", "rejected", "withdrawn"}
 PROCUREMENT_RESPONSE_DECISIONS = {"accept", "reject"}
+DEAL_MATCH_FREE_DAILY_LIMIT = 3
+DEAL_MATCH_MAX_RESULTS = 40
+DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT = 8.0
+DEAL_MATCH_MAX_MIN_MARGIN_PERCENT = 35.0
 
 
 def _parse_enum_text(
@@ -127,6 +132,177 @@ def _coerce_float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
+
+
+def _normalized_match_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _match_tokens(value: Any) -> set[str]:
+    cleaned = "".join(ch.lower() if ch.isalnum() else " " for ch in str(value or ""))
+    return {token for token in cleaned.split() if len(token) >= 3}
+
+
+def _decode_json_text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item or "").strip()]
+    return []
+
+
+def _score_budget_alignment(price: float, budget_min: float | None, budget_max: float | None) -> tuple[float, str]:
+    if budget_min is None and budget_max is None:
+        return 10.0, "unbounded"
+
+    if budget_min is not None and budget_max is not None and budget_max < budget_min:
+        budget_min, budget_max = budget_max, budget_min
+
+    if budget_min is not None and budget_max is not None:
+        if budget_min <= price <= budget_max:
+            return 20.0, "within_budget"
+        if price < budget_min:
+            gap_pct = ((budget_min - price) / budget_min) if budget_min > 0 else 0
+            return (14.0 if gap_pct <= 0.15 else 8.0), "below_budget"
+        if budget_max <= 0:
+            return 0.0, "over_budget"
+        gap_pct = (price - budget_max) / budget_max
+        if gap_pct <= 0.08:
+            return 12.0, "over_budget"
+        if gap_pct <= 0.18:
+            return 5.0, "over_budget"
+        return 0.0, "over_budget"
+
+    if budget_min is not None:
+        if price >= budget_min:
+            return 16.0, "within_budget"
+        gap_pct = ((budget_min - price) / budget_min) if budget_min > 0 else 0
+        return (11.0 if gap_pct <= 0.15 else 6.0), "below_budget"
+
+    if budget_max is None:
+        return 10.0, "unbounded"
+    if price <= budget_max:
+        return 16.0, "within_budget"
+    if budget_max <= 0:
+        return 0.0, "over_budget"
+    gap_pct = (price - budget_max) / budget_max
+    return (8.0 if gap_pct <= 0.1 else 0.0), "over_budget"
+
+
+def _suggested_price_band(
+    list_price: float,
+    budget_min: float | None,
+    budget_max: float | None,
+    min_margin_percent: float,
+) -> tuple[float, float]:
+    baseline_price = max(1.0, list_price)
+    margin_floor = max(1.0, baseline_price * (1.0 - (min_margin_percent / 100.0)))
+    lower_bound = max(margin_floor, baseline_price * 0.96)
+
+    if budget_min is not None:
+        lower_bound = max(lower_bound, budget_min)
+
+    if budget_max is not None:
+        upper_bound = budget_max
+    else:
+        upper_bound = max(lower_bound, baseline_price * 1.12)
+
+    if budget_max is None:
+        upper_bound = max(upper_bound, lower_bound)
+    if upper_bound < lower_bound:
+        upper_bound = lower_bound
+
+    return round(lower_bound, 2), round(upper_bound, 2)
+
+
+def _fit_label_for_score(score: float) -> str:
+    if score >= 78:
+        return "high"
+    if score >= 56:
+        return "good"
+    return "fair"
+
+
+def _estimate_win_probability(score: float, responses_count: int, days_until_needed: int | None) -> int:
+    value = 18.0 + (score * 0.74) - (responses_count * 1.7)
+    if days_until_needed is not None and days_until_needed <= 5:
+        value += 4.0
+    if days_until_needed is not None and days_until_needed < 0:
+        value -= 18.0
+    return int(round(_clamp(value, 5.0, 95.0)))
+
+
+def _load_farmer_deal_match_settings(client, user_id: str) -> tuple[dict[str, Any], bool]:
+    defaults = {
+        "user_id": user_id,
+        "realtime_alerts_enabled": True,
+        "min_margin_percent": DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT,
+        "free_unlocked_on": None,
+        "free_unlocked_request_ids": [],
+    }
+    try:
+        row, _ = client.select(
+            "farmer_deal_match_settings",
+            filters={"user_id": f"eq.{user_id}"},
+            single=True,
+        )
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "farmer_deal_match_settings"):
+            return defaults, False
+        raise
+
+    if not row:
+        return defaults, True
+
+    min_margin = _clamp(
+        _safe_float(row.get("min_margin_percent"), DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT),
+        0.0,
+        DEAL_MATCH_MAX_MIN_MARGIN_PERCENT,
+    )
+
+    return (
+        {
+            "user_id": user_id,
+            "realtime_alerts_enabled": bool(row.get("realtime_alerts_enabled"))
+            if row.get("realtime_alerts_enabled") is not None
+            else True,
+            "min_margin_percent": min_margin,
+            "free_unlocked_on": str(row.get("free_unlocked_on") or "") or None,
+            "free_unlocked_request_ids": _decode_json_text_list(row.get("free_unlocked_request_ids")),
+        },
+        True,
+    )
+
+
+def _upsert_farmer_deal_match_settings(client, payload: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        return client.insert(
+            "farmer_deal_match_settings",
+            payload,
+            single=True,
+            upsert=True,
+            on_conflict="user_id",
+        )
+    except requests.HTTPError as exc:
+        if _is_missing_relation_error(exc, "farmer_deal_match_settings"):
+            return None
+        raise
 
 
 def _parse_iso_date_relaxed(value: Any) -> date | None:
@@ -1388,6 +1564,24 @@ def company_procurement_response_decision(request: HttpRequest, request_id: str,
                 filters={"id": f"eq.{response_id}"},
                 single=True,
             )
+            write_user_notification(
+                admin_client(),
+                user_id=str(updated.get("farmer_id") or response.get("farmer_id") or "").strip() or None,
+                title="Procurement response decision",
+                message="Your procurement response was rejected by the company.",
+                priority="medium",
+                category="update",
+                entity_type="procurement_response",
+                entity_id=response_id,
+                action_url="/dashboard/discovery",
+                source="company",
+                source_user_id=request.user_id,
+                metadata={
+                    "request_id": request_id,
+                    "status": "rejected",
+                    "company_note": company_note,
+                },
+            )
             enriched_response = _apply_procurement_response_market_insights(
                 procurement_request,
                 _enrich_procurement_responses(client, [updated]),
@@ -1464,6 +1658,25 @@ def company_procurement_response_decision(request: HttpRequest, request_id: str,
             },
             filters={"id": f"eq.{response_id}"},
             single=True,
+        )
+        write_user_notification(
+            admin_client(),
+            user_id=str(updated.get("farmer_id") or response.get("farmer_id") or "").strip() or None,
+            title="Procurement response accepted",
+            message="Your procurement response was accepted and converted into an order.",
+            priority="high",
+            category="update",
+            entity_type="procurement_response",
+            entity_id=response_id,
+            action_url="/dashboard/orders",
+            source="company",
+            source_user_id=request.user_id,
+            metadata={
+                "request_id": request_id,
+                "status": "accepted",
+                "order_id": updated.get("order_id"),
+                "accepted_quantity": updated.get("accepted_quantity"),
+            },
         )
 
         if bool(data.get("close_request")):
@@ -1690,6 +1903,544 @@ def farmer_procurement(request: HttpRequest):
     if request.method == "GET":
         return farmer_procurement_list(request)
     return method_not_allowed(["GET"])
+
+
+@require_auth
+def farmer_deal_matches(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+
+    try:
+        role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
+        if role not in {"farmer_free", "farmer_pro", "admin"}:
+            raise ApiException("Only farmer accounts can access deal matches.", 403)
+
+        is_pro = role in {"farmer_pro", "admin"}
+        settings, settings_available = _load_farmer_deal_match_settings(request.supabase, request.user_id)
+        min_margin_percent = (
+            _clamp(_safe_float(settings.get("min_margin_percent"), DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT), 0.0, DEAL_MATCH_MAX_MIN_MARGIN_PERCENT)
+            if is_pro
+            else DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT
+        )
+        realtime_alerts_enabled = bool(settings.get("realtime_alerts_enabled")) if is_pro else False
+
+        profile, _ = request.supabase.select(
+            "profiles",
+            select="county",
+            filters={"user_id": f"eq.{request.user_id}"},
+            single=True,
+        )
+        farmer_county = _normalized_match_text((profile or {}).get("county"))
+
+        my_products, _ = request.supabase.select(
+            "products",
+            select="id, name, category, unit, stock, price_per_unit, is_available, location",
+            filters={"farmer_id": f"eq.{request.user_id}", "is_available": "eq.true"},
+            order="updated_at.desc",
+            limit=200,
+        )
+        product_rows = [
+            row
+            for row in (my_products or [])
+            if bool(row.get("is_available")) and _safe_float(row.get("stock")) > 0 and _safe_float(row.get("price_per_unit")) > 0
+        ]
+
+        if not product_rows:
+            return JsonResponse(
+                {
+                    "matches": [],
+                    "meta": {
+                        "role": role,
+                        "is_pro": is_pro,
+                        "daily_limit": DEAL_MATCH_FREE_DAILY_LIMIT if not is_pro else None,
+                        "remaining_today": DEAL_MATCH_FREE_DAILY_LIMIT if not is_pro else None,
+                        "total_scored_matches": 0,
+                        "generated_at": now_iso(),
+                    },
+                    "settings": {
+                        "realtime_alerts_enabled": realtime_alerts_enabled,
+                        "min_margin_percent": min_margin_percent,
+                        "settings_persisted": settings_available,
+                    },
+                }
+            )
+
+        product_profiles: list[dict[str, Any]] = []
+        for row in product_rows:
+            product_name = str(row.get("name") or "")
+            product_category = str(row.get("category") or "")
+            normalized_location = _normalized_match_text(row.get("location"))
+            product_profiles.append(
+                {
+                    "row": row,
+                    "name_normalized": _normalized_match_text(product_name),
+                    "category_normalized": _normalized_match_text(product_category),
+                    "tokens": _match_tokens(f"{product_name} {product_category}"),
+                    "county_normalized": normalized_location or farmer_county,
+                }
+            )
+
+        admin = admin_client()
+        procurement_requests, _ = _safe_select(
+            admin,
+            "company_procurement_requests",
+            default=[],
+            filters={"status": "eq.open"},
+            order="created_at.desc",
+            limit=160,
+        )
+        procurement_requests = procurement_requests or []
+
+        company_ids = [row.get("company_id") for row in procurement_requests if row.get("company_id")]
+        companies_by_id: dict[str, dict[str, Any]] = {}
+        if company_ids:
+            company_rows, _ = admin.select(
+                "companies",
+                select="id, company_name, company_type, headquarters_location, service_areas, verified, verification_status",
+                filters={"id": f"in.{postgrest_in(company_ids)}"},
+            )
+            companies_by_id = {str(company.get("id")): company for company in company_rows or []}
+
+        open_requests: list[dict[str, Any]] = []
+        for row in procurement_requests:
+            company = companies_by_id.get(str(row.get("company_id") or ""))
+            if not company:
+                continue
+            if not (company.get("verified") or company.get("verification_status") == "approved"):
+                continue
+            open_requests.append(
+                {
+                    **row,
+                    "company": {
+                        "id": company.get("id"),
+                        "company_name": company.get("company_name"),
+                        "company_type": company.get("company_type"),
+                        "headquarters_location": company.get("headquarters_location"),
+                        "service_areas": company.get("service_areas") or [],
+                    },
+                }
+            )
+
+        request_ids = [str(row.get("id")) for row in open_requests if row.get("id")]
+        responses_count_by_request: dict[str, int] = {}
+        submitted_count_by_request: dict[str, int] = {}
+        my_response_by_request_product: dict[tuple[str, str], str] = {}
+        my_response_by_request: dict[str, str] = {}
+
+        if request_ids:
+            all_responses, _ = _safe_select(
+                admin,
+                "company_procurement_responses",
+                default=[],
+                select="request_id, status",
+                filters={"request_id": f"in.{postgrest_in(request_ids)}"},
+                limit=1500,
+            )
+            for row in all_responses or []:
+                request_id = str(row.get("request_id") or "")
+                if not request_id:
+                    continue
+                responses_count_by_request[request_id] = responses_count_by_request.get(request_id, 0) + 1
+                if str(row.get("status") or "") == "submitted":
+                    submitted_count_by_request[request_id] = submitted_count_by_request.get(request_id, 0) + 1
+
+            my_responses, _ = _safe_select(
+                request.supabase,
+                "company_procurement_responses",
+                default=[],
+                select="request_id, product_id, status, updated_at",
+                filters={
+                    "request_id": f"in.{postgrest_in(request_ids)}",
+                    "farmer_id": f"eq.{request.user_id}",
+                },
+                order="updated_at.desc",
+                limit=400,
+            )
+            for response in my_responses or []:
+                request_id = str(response.get("request_id") or "")
+                product_id = str(response.get("product_id") or "")
+                status = str(response.get("status") or "")
+                if not request_id:
+                    continue
+                if request_id not in my_response_by_request:
+                    my_response_by_request[request_id] = status
+                if request_id and product_id and (request_id, product_id) not in my_response_by_request_product:
+                    my_response_by_request_product[(request_id, product_id)] = status
+
+        opportunities: list[dict[str, Any]] = []
+
+        for request_row in open_requests:
+            request_id = str(request_row.get("id") or "")
+            if not request_id:
+                continue
+
+            category = str(request_row.get("category") or "")
+            title = str(request_row.get("title") or "")
+            notes = str(request_row.get("notes") or "")
+            request_text = f"{title} {category} {notes}"
+            request_tokens = _match_tokens(request_text)
+            request_text_normalized = _normalized_match_text(request_text)
+            request_category_normalized = _normalized_match_text(category)
+            target_county = _normalized_match_text(request_row.get("target_county"))
+            requested_quantity = _safe_float(request_row.get("quantity_needed"), 0.0)
+            normalized_quantity = requested_quantity if requested_quantity > 0 else 1.0
+            budget_min = _coerce_float_or_none(request_row.get("budget_min"))
+            budget_max = _coerce_float_or_none(request_row.get("budget_max"))
+            needed_by = _parse_iso_date_relaxed(request_row.get("needed_by"))
+            days_until_needed = (needed_by - date.today()).days if needed_by else None
+
+            best_candidate: dict[str, Any] | None = None
+            responses_count = responses_count_by_request.get(request_id, 0)
+            submitted_count = submitted_count_by_request.get(request_id, 0)
+
+            for product_profile in product_profiles:
+                product = product_profile["row"]
+                product_id = str(product.get("id") or "")
+                if not product_id:
+                    continue
+
+                product_price = _safe_float(product.get("price_per_unit"), 0.0)
+                product_stock = _safe_float(product.get("stock"), 0.0)
+                if product_price <= 0 or product_stock <= 0:
+                    continue
+
+                product_tokens = product_profile["tokens"]
+                token_overlap = len(request_tokens.intersection(product_tokens))
+                overlap_ratio = token_overlap / max(1, min(len(request_tokens), len(product_tokens)))
+
+                exact_category_match = bool(
+                    request_category_normalized
+                    and product_profile["category_normalized"]
+                    and request_category_normalized == product_profile["category_normalized"]
+                )
+                category_related = bool(
+                    request_category_normalized
+                    and (
+                        request_category_normalized in product_profile["name_normalized"]
+                        or request_category_normalized in product_profile["category_normalized"]
+                    )
+                )
+
+                text_score = 0.0
+                if exact_category_match:
+                    text_score = 32.0
+                elif category_related:
+                    text_score = 24.0
+                elif overlap_ratio >= 0.25:
+                    text_score = 12.0
+
+                if overlap_ratio >= 0.5:
+                    text_score += 10.0
+                elif overlap_ratio >= 0.3:
+                    text_score += 6.0
+                elif token_overlap > 0:
+                    text_score += 3.0
+
+                if product_profile["name_normalized"] and product_profile["name_normalized"] in request_text_normalized:
+                    text_score += 5.0
+
+                if text_score <= 0:
+                    continue
+
+                stock_ratio = min(1.0, product_stock / normalized_quantity) if normalized_quantity > 0 else 1.0
+                stock_score = 6.0 + (stock_ratio * 18.0)
+                if requested_quantity > 0 and product_stock < requested_quantity * 0.2:
+                    stock_score -= 6.0
+
+                if not target_county:
+                    county_score = 8.0
+                elif target_county == product_profile["county_normalized"]:
+                    county_score = 18.0
+                elif target_county == farmer_county:
+                    county_score = 12.0
+                else:
+                    county_score = 2.0
+
+                budget_score, budget_fit = _score_budget_alignment(product_price, budget_min, budget_max)
+
+                if days_until_needed is None:
+                    urgency_score = 3.0
+                elif days_until_needed < 0:
+                    urgency_score = -6.0
+                elif days_until_needed <= 3:
+                    urgency_score = 8.0
+                elif days_until_needed <= 10:
+                    urgency_score = 6.0
+                elif days_until_needed <= 30:
+                    urgency_score = 3.0
+                else:
+                    urgency_score = 1.0
+
+                competition_penalty = min(14.0, responses_count * 1.3)
+
+                my_response_status = my_response_by_request_product.get((request_id, product_id))
+                already_applied = bool(my_response_status and my_response_status in {"submitted", "accepted"})
+                repeat_penalty = 5.0 if already_applied else 0.0
+
+                raw_score = (
+                    text_score
+                    + stock_score
+                    + county_score
+                    + budget_score
+                    + urgency_score
+                    - competition_penalty
+                    - repeat_penalty
+                )
+                score = _clamp(raw_score, 0.0, 100.0)
+                if score < 35.0:
+                    continue
+
+                reasons: list[str] = []
+                if exact_category_match:
+                    reasons.append("Category aligns with the buyer request.")
+                if target_county and (target_county == product_profile["county_normalized"] or target_county == farmer_county):
+                    reasons.append("Target county matches your current supply location.")
+                if stock_ratio >= 1.0:
+                    reasons.append("Your stock can satisfy the full requested quantity.")
+                if budget_fit == "within_budget":
+                    reasons.append("Your listing price fits the buyer's budget.")
+                elif budget_fit == "below_budget":
+                    reasons.append("Your price is below the buyer budget and can be positioned as value.")
+                if responses_count <= 2:
+                    reasons.append("Competition is still light on this request.")
+                if not reasons:
+                    reasons.append("Your product details align with this buyer demand.")
+
+                suggested_min, suggested_max = _suggested_price_band(
+                    product_price,
+                    budget_min,
+                    budget_max,
+                    min_margin_percent,
+                )
+                margin_floor = round(max(1.0, product_price * (1.0 - (min_margin_percent / 100.0))), 2)
+                guarded_price = round(max(suggested_min, margin_floor), 2)
+                if suggested_max < guarded_price:
+                    suggested_max = guarded_price
+
+                draft_quantity = round(
+                    min(product_stock, requested_quantity) if requested_quantity > 0 else min(product_stock, 1.0),
+                    2,
+                )
+                if draft_quantity <= 0:
+                    draft_quantity = min(product_stock, 1.0)
+
+                candidate = {
+                    "score": round(score, 1),
+                    "fit_label": _fit_label_for_score(score),
+                    "reasons": reasons[:3],
+                    "product": product,
+                    "budget_fit": budget_fit,
+                    "suggested_min": suggested_min,
+                    "suggested_max": suggested_max,
+                    "guarded_price": guarded_price,
+                    "margin_floor": margin_floor,
+                    "draft_quantity": round(draft_quantity, 2),
+                    "already_applied": already_applied,
+                    "my_response_status": my_response_status or my_response_by_request.get(request_id),
+                }
+
+                if best_candidate is None or candidate["score"] > best_candidate["score"]:
+                    best_candidate = candidate
+
+            if not best_candidate:
+                continue
+
+            product = best_candidate["product"]
+            recommended_product = {
+                "id": product.get("id"),
+                "name": product.get("name"),
+                "category": product.get("category"),
+                "stock": round(_safe_float(product.get("stock")), 2),
+                "unit": product.get("unit") or "kg",
+                "price_per_unit": round(_safe_float(product.get("price_per_unit")), 2),
+            }
+            draft_offer = {
+                "product_id": recommended_product["id"],
+                "quantity_offered": best_candidate["draft_quantity"],
+                "price_per_unit": best_candidate["guarded_price"],
+                "notes": "Auto-draft from Deal Match Engine.",
+            }
+
+            row = {
+                "request_id": request_id,
+                "title": title,
+                "category": category,
+                "target_county": request_row.get("target_county"),
+                "quantity_needed": round(_safe_float(request_row.get("quantity_needed")), 2),
+                "unit": request_row.get("unit") or "kg",
+                "budget_min": _coerce_float_or_none(request_row.get("budget_min")),
+                "budget_max": _coerce_float_or_none(request_row.get("budget_max")),
+                "needed_by": request_row.get("needed_by"),
+                "notes": request_row.get("notes"),
+                "company": request_row.get("company"),
+                "score": best_candidate["score"],
+                "fit_label": best_candidate["fit_label"],
+                "reasons": best_candidate["reasons"],
+                "responses_count": responses_count,
+                "submitted_responses_count": submitted_count,
+                "recommended_product": recommended_product,
+                "suggested_price_range": {
+                    "min": best_candidate["suggested_min"],
+                    "max": best_candidate["suggested_max"],
+                    "currency": "KES",
+                },
+                "suggested_quantity": best_candidate["draft_quantity"],
+                "already_applied": best_candidate["already_applied"],
+                "my_response_status": best_candidate["my_response_status"],
+                "draft_offer": draft_offer,
+                "created_at": request_row.get("created_at"),
+                "match_budget_fit": best_candidate["budget_fit"],
+            }
+
+            if is_pro:
+                row["win_probability"] = _estimate_win_probability(
+                    best_candidate["score"],
+                    responses_count,
+                    days_until_needed,
+                )
+                row["margin_guard"] = {
+                    "min_margin_percent": min_margin_percent,
+                    "floor_price": best_candidate["margin_floor"],
+                    "guarded_price": best_candidate["guarded_price"],
+                    "would_violate_budget": bool(
+                        row["budget_max"] is not None and best_candidate["margin_floor"] > float(row["budget_max"])
+                    ),
+                }
+
+            opportunities.append(row)
+
+        opportunities.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0),
+                str(item.get("needed_by") or "9999-12-31"),
+                str(item.get("created_at") or ""),
+            )
+        )
+
+        visible_matches = opportunities[:DEAL_MATCH_MAX_RESULTS]
+        remaining_today = None
+
+        if not is_pro:
+            today_text = str(date.today())
+            unlocked_on = str(settings.get("free_unlocked_on") or "")
+            unlocked_ids_raw = _decode_json_text_list(settings.get("free_unlocked_request_ids"))
+            unlocked_ids = [] if unlocked_on != today_text else unlocked_ids_raw[:DEAL_MATCH_FREE_DAILY_LIMIT]
+            unlocked_set = set(unlocked_ids)
+
+            if len(unlocked_set) < DEAL_MATCH_FREE_DAILY_LIMIT:
+                for item in opportunities:
+                    request_id = str(item.get("request_id") or "")
+                    if not request_id or request_id in unlocked_set:
+                        continue
+                    unlocked_set.add(request_id)
+                    unlocked_ids.append(request_id)
+                    if len(unlocked_set) >= DEAL_MATCH_FREE_DAILY_LIMIT:
+                        break
+
+            visible_matches = [item for item in opportunities if str(item.get("request_id") or "") in unlocked_set]
+            remaining_today = max(0, DEAL_MATCH_FREE_DAILY_LIMIT - len(unlocked_set))
+
+            if settings_available:
+                _upsert_farmer_deal_match_settings(
+                    request.supabase,
+                    {
+                        "user_id": request.user_id,
+                        "realtime_alerts_enabled": bool(settings.get("realtime_alerts_enabled")),
+                        "min_margin_percent": round(min_margin_percent, 2),
+                        "free_unlocked_on": today_text,
+                        "free_unlocked_request_ids": unlocked_ids[:DEAL_MATCH_FREE_DAILY_LIMIT],
+                    },
+                )
+
+        return JsonResponse(
+            {
+                "matches": visible_matches,
+                "meta": {
+                    "role": role,
+                    "is_pro": is_pro,
+                    "daily_limit": DEAL_MATCH_FREE_DAILY_LIMIT if not is_pro else None,
+                    "remaining_today": remaining_today,
+                    "total_scored_matches": len(opportunities),
+                    "generated_at": now_iso(),
+                },
+                "settings": {
+                    "realtime_alerts_enabled": realtime_alerts_enabled,
+                    "min_margin_percent": min_margin_percent,
+                    "settings_persisted": settings_available,
+                },
+            }
+        )
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error building farmer deal matches: {e}")
+        return JsonResponse({"error": "Failed to build deal matches"}, status=500)
+
+
+@require_auth
+def farmer_deal_match_settings(request: HttpRequest):
+    if request.method != "PATCH":
+        return method_not_allowed(["PATCH"])
+
+    try:
+        role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
+        if role not in {"farmer_pro", "admin"}:
+            raise ApiException("Deal Match settings are available on Farmer Pro only.", 403)
+
+        data = parse_json_body(request)
+        settings, settings_available = _load_farmer_deal_match_settings(request.supabase, request.user_id)
+
+        realtime_alerts_enabled = bool(settings.get("realtime_alerts_enabled"))
+        min_margin_percent = _clamp(
+            _safe_float(settings.get("min_margin_percent"), DEAL_MATCH_DEFAULT_MIN_MARGIN_PERCENT),
+            0.0,
+            DEAL_MATCH_MAX_MIN_MARGIN_PERCENT,
+        )
+
+        if "realtime_alerts_enabled" in data:
+            realtime_alerts_enabled = bool(data.get("realtime_alerts_enabled"))
+        if "min_margin_percent" in data:
+            min_margin_percent = _parse_non_negative_number(
+                data.get("min_margin_percent"),
+                "Minimum margin percent",
+            )
+            if min_margin_percent > DEAL_MATCH_MAX_MIN_MARGIN_PERCENT:
+                raise ApiException(
+                    f"Minimum margin percent cannot exceed {int(DEAL_MATCH_MAX_MIN_MARGIN_PERCENT)}.",
+                    400,
+                )
+
+        payload = {
+            "user_id": request.user_id,
+            "realtime_alerts_enabled": realtime_alerts_enabled,
+            "min_margin_percent": round(min_margin_percent, 2),
+            "free_unlocked_on": settings.get("free_unlocked_on"),
+            "free_unlocked_request_ids": settings.get("free_unlocked_request_ids") or [],
+        }
+        persisted_row = _upsert_farmer_deal_match_settings(request.supabase, payload)
+        if persisted_row:
+            min_margin_percent = _clamp(
+                _safe_float(persisted_row.get("min_margin_percent"), min_margin_percent),
+                0.0,
+                DEAL_MATCH_MAX_MIN_MARGIN_PERCENT,
+            )
+            realtime_alerts_enabled = bool(persisted_row.get("realtime_alerts_enabled"))
+
+        return JsonResponse(
+            {
+                "settings": {
+                    "realtime_alerts_enabled": realtime_alerts_enabled,
+                    "min_margin_percent": round(min_margin_percent, 2),
+                    "settings_persisted": settings_available and persisted_row is not None,
+                },
+                "success": True,
+            }
+        )
+    except ApiException as exc:
+        return api_exception_response(exc)
+    except Exception as e:
+        logger.error(f"Error updating farmer deal match settings: {e}")
+        return JsonResponse({"error": "Failed to update deal match settings"}, status=500)
 
 
 @require_auth
@@ -1971,6 +2722,29 @@ def admin_company_verify_post(request: HttpRequest, company_id: str):
             }
         
         result = admin.update("companies", update_data, filters={"id": f"eq.{company_id}"})
+        final_status = "approved" if action == "approve" else "rejected"
+        status_message = (
+            "Your company profile has been approved. Company workflows are now fully unlocked."
+            if final_status == "approved"
+            else "Your company profile was rejected. Review the notes and update your details before reapplying."
+        )
+        write_user_notification(
+            admin,
+            user_id=user_id,
+            title="Company verification update",
+            message=status_message,
+            priority="high",
+            category="update",
+            entity_type="company",
+            entity_id=company_id,
+            action_url="/dashboard/company",
+            source="admin",
+            source_user_id=request.user_id,
+            metadata={
+                "verification_status": final_status,
+                "notes": notes,
+            },
+        )
         
         return JsonResponse({
             "company": result[0] if result else company,
@@ -2072,6 +2846,20 @@ def admin_company_create_direct_post(request: HttpRequest):
         except Exception as e:
             logger.error(f"Error setting company role: {e}")
             raise ApiException("Company profile was created but the company role could not be assigned. Please repair the role schema and try again.", 500)
+        write_user_notification(
+            admin,
+            user_id=user_id,
+            title="Company profile approved",
+            message="An admin created and approved your company profile. You can now use company workflows.",
+            priority="high",
+            category="update",
+            entity_type="company",
+            entity_id=created_company.get("id"),
+            action_url="/dashboard/company",
+            source="admin",
+            source_user_id=request.user_id,
+            metadata={"verification_status": "approved"},
+        )
         
         return JsonResponse({
             "company": created_company,

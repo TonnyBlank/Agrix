@@ -626,7 +626,7 @@ export default function MyFarm() {
                       </span>
                     </div>
 
-                    {!!topCrops.length ? (
+                    {topCrops.length > 0 ? (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {topCrops.map((crop) => (
                           <span

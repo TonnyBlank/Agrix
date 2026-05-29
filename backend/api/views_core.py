@@ -34,6 +34,8 @@ from .common import (
     resolve_app_role,
     set_user_role_with_plan,
     user_client,
+    write_user_notification,
+    write_user_notifications,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 
@@ -1334,6 +1336,20 @@ def order_delivery_proof(request: HttpRequest, order_id: str):
         filters={"id": f"eq.{order_id}"},
         single=True,
     )
+    write_user_notification(
+        admin_client(),
+        user_id=str(updated.get("buyer_id") or order.get("buyer_id") or "").strip() or None,
+        title="Delivery proof submitted",
+        message="The seller uploaded delivery proof. Please confirm delivery when you receive the produce.",
+        priority="high",
+        category="action",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/orders",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"delivery_signoff_status": updated.get("delivery_signoff_status")},
+    )
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
 
 
@@ -1374,6 +1390,20 @@ def order_delivery_otp_request(request: HttpRequest, order_id: str):
         },
         filters={"id": f"eq.{order_id}"},
         single=True,
+    )
+    write_user_notification(
+        admin_client(),
+        user_id=str(updated.get("buyer_id") or order.get("buyer_id") or "").strip() or None,
+        title="Delivery confirmation code ready",
+        message="The seller requested delivery confirmation. Use the OTP shown in your orders workflow to confirm delivery.",
+        priority="high",
+        category="action",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/orders",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"otp_expires_at": expires_at},
     )
     return JsonResponse(
         {
@@ -1456,6 +1486,20 @@ def order_delivery_otp_verify(request: HttpRequest, order_id: str):
         filters={"id": f"eq.{order_id}"},
         single=True,
     )
+    write_user_notification(
+        admin_client(),
+        user_id=str(updated.get("farmer_id") or order.get("farmer_id") or "").strip() or None,
+        title="Buyer confirmed delivery",
+        message="The buyer confirmed delivery. The order is now eligible for official payout release checks.",
+        priority="high",
+        category="update",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/orders",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"delivery_signoff_status": updated.get("delivery_signoff_status")},
+    )
     return JsonResponse(
         {
             "message": f"Delivery confirmed. Dispute window ends at {dispute_deadline_at}.",
@@ -1499,6 +1543,36 @@ def order_raise_dispute(request: HttpRequest, order_id: str):
         },
         filters={"id": f"eq.{order_id}"},
         single=True,
+    )
+    notifications_admin = admin_client()
+    write_user_notification(
+        notifications_admin,
+        user_id=str(updated.get("farmer_id") or order.get("farmer_id") or "").strip() or None,
+        title="Order dispute opened",
+        message="A buyer opened a dispute for a delivered order. Review the dispute details in your order history.",
+        priority="high",
+        category="action",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/orders",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"dispute_reason": reason},
+    )
+    admin_rows, _ = notifications_admin.select("user_roles", select="user_id", filters={"role": "eq.admin"})
+    write_user_notifications(
+        notifications_admin,
+        user_ids=[str(item.get("user_id") or "").strip() for item in (admin_rows or [])],
+        title="New order dispute requires review",
+        message="A buyer has opened a delivery dispute. Review and resolve it from the admin disputes queue.",
+        priority="high",
+        category="action",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/admin/disputes",
+        source="user",
+        source_user_id=request.user_id,
+        metadata={"dispute_reason": reason},
     )
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
 

@@ -17,6 +17,21 @@ type NotificationItem = {
   category: "action" | "update" | "info";
   href?: string;
   icon: typeof Bell;
+  readAt?: string | null;
+  createdAt?: string;
+  persisted?: boolean;
+};
+
+type PersistedNotification = {
+  id: string;
+  title: string;
+  message: string;
+  priority: NotificationItem["priority"];
+  category: NotificationItem["category"];
+  entity_type?: string | null;
+  action_url?: string | null;
+  read_at?: string | null;
+  created_at?: string;
 };
 
 type CompanyHubResponse = {
@@ -102,6 +117,19 @@ function priorityTone(priority: NotificationItem["priority"]) {
   return "border-emerald-200 bg-emerald-50/80 text-emerald-700";
 }
 
+function iconForEntity(entityType: string | null | undefined, category: NotificationItem["category"]): typeof Bell {
+  const normalized = String(entityType || "").trim().toLowerCase();
+  if (normalized === "order") return ShoppingCart;
+  if (normalized.includes("loan")) return CreditCard;
+  if (normalized.includes("verification")) return ShieldCheck;
+  if (normalized.includes("company")) return Building2;
+  if (normalized.includes("procurement")) return ClipboardCheck;
+  if (normalized === "user") return Users;
+  if (normalized.includes("product")) return Package;
+  if (category === "action") return ClipboardCheck;
+  return Bell;
+}
+
 export default function NotificationsCenter() {
   const { role, profile } = useAuth();
   const { sellingOrders, buyingOrders, loading: ordersLoading } = useOrders();
@@ -131,6 +159,9 @@ export default function NotificationsCenter() {
     orders: [],
   });
   const [loadingExtra, setLoadingExtra] = useState(false);
+  const [loadingServerNotifications, setLoadingServerNotifications] = useState(false);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
+  const [serverNotifications, setServerNotifications] = useState<PersistedNotification[]>([]);
   const [activeFilter, setActiveFilter] = useState<"all" | NotificationItem["category"]>("all");
 
   useEffect(() => {
@@ -193,14 +224,50 @@ export default function NotificationsCenter() {
     };
   }, [role]);
 
+  useEffect(() => {
+    let active = true;
+    setLoadingServerNotifications(true);
+
+    apiFetch<PersistedNotification[]>("/notifications?limit=80")
+      .then((rows) => {
+        if (!active) return;
+        setServerNotifications(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        if (!active) return;
+        setServerNotifications([]);
+      })
+      .finally(() => {
+        if (active) {
+          setLoadingServerNotifications(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [role]);
+
   const notifications = useMemo<NotificationItem[]>(() => {
-    const items: NotificationItem[] = [];
+    const persistedItems: NotificationItem[] = serverNotifications.map((notification) => ({
+      id: `persisted-${notification.id}`,
+      title: notification.title,
+      message: notification.message,
+      priority: notification.priority,
+      category: notification.category,
+      href: notification.action_url || undefined,
+      icon: iconForEntity(notification.entity_type, notification.category),
+      readAt: notification.read_at ?? null,
+      createdAt: notification.created_at,
+      persisted: true,
+    }));
+    const roleItems: NotificationItem[] = [];
 
     if (role === "company") {
       const company = companyState.company;
       const stats = companyState.stats;
       if (!company) {
-        items.push({
+        roleItems.push({
           id: "company-profile-missing",
           title: "Complete company setup",
           message: "Your account needs a company profile before products, procurement, and partner workflows can fully operate.",
@@ -209,11 +276,11 @@ export default function NotificationsCenter() {
           href: "/dashboard/company",
           icon: Building2,
         });
-        return items;
+        return [...persistedItems, ...roleItems];
       }
 
       if (company.verification_status === "pending") {
-        items.push({
+        roleItems.push({
           id: "company-verification-pending",
           title: "Verification is still in progress",
           message: "Keep profile and contact details ready so the team can complete review without delays.",
@@ -225,7 +292,7 @@ export default function NotificationsCenter() {
       }
 
       if (!company.service_areas?.length) {
-        items.push({
+        roleItems.push({
           id: "company-coverage",
           title: "Set service areas",
           message: "Coverage information helps farmers and buyers understand where your company can trade.",
@@ -237,7 +304,7 @@ export default function NotificationsCenter() {
       }
 
       if (!stats?.products_count) {
-        items.push({
+        roleItems.push({
           id: "company-products",
           title: "Build your product catalog",
           message: "A live catalog gives your company credibility and makes procurement follow-through easier.",
@@ -252,7 +319,7 @@ export default function NotificationsCenter() {
         (product) => product.stock > 0 && product.stock <= (product.minimum_order_quantity ?? 1),
       );
       if (lowStock.length) {
-        items.push({
+        roleItems.push({
           id: "company-low-stock",
           title: "Recent products need stock attention",
           message: `${lowStock.length} product listings are close to their minimum order threshold.`,
@@ -264,7 +331,7 @@ export default function NotificationsCenter() {
       }
 
       if (!stats?.farmer_partners) {
-        items.push({
+        roleItems.push({
           id: "company-partners",
           title: "Start building supplier relationships",
           message: "Invite or approve farmer partners so demand has a real supplier network behind it.",
@@ -277,7 +344,7 @@ export default function NotificationsCenter() {
 
       const openRequests = companyState.requests.filter((request) => request.status === "open");
       if (!openRequests.length) {
-        items.push({
+        roleItems.push({
           id: "company-procurement",
           title: "Post a procurement request",
           message: "Publishing demand makes it easier for farmers to respond with the right supply.",
@@ -287,7 +354,7 @@ export default function NotificationsCenter() {
           icon: ClipboardCheck,
         });
       } else {
-        items.push({
+        roleItems.push({
           id: "company-open-requests",
           title: "Demand is visible to suppliers",
           message: `${openRequests.length} procurement requests are currently open for supplier response.`,
@@ -300,7 +367,7 @@ export default function NotificationsCenter() {
 
       const pendingOrders = companyState.orders.filter((order) => ["pending", "processing"].includes(order.status));
       if (pendingOrders.length) {
-        items.push({
+        roleItems.push({
           id: "company-orders",
           title: "Orders need follow-up",
           message: `${pendingOrders.length} company orders are still in active processing states.`,
@@ -312,7 +379,7 @@ export default function NotificationsCenter() {
       }
     } else if (role === "admin") {
       if ((adminState.overview?.pendingVerificationsCount ?? 0) > 0) {
-        items.push({
+        roleItems.push({
           id: "admin-verifications",
           title: "Identity checks are waiting",
           message: `${adminState.overview?.pendingVerificationsCount ?? 0} verification records need review.`,
@@ -324,7 +391,7 @@ export default function NotificationsCenter() {
       }
 
       if ((adminState.companies?.length ?? 0) > 0) {
-        items.push({
+        roleItems.push({
           id: "admin-companies",
           title: "Company approvals are pending",
           message: `${adminState.companies.length} company applications are waiting in the review queue.`,
@@ -336,7 +403,7 @@ export default function NotificationsCenter() {
       }
 
       if ((adminState.overview?.pendingLoansCount ?? 0) > 0) {
-        items.push({
+        roleItems.push({
           id: "admin-loans",
           title: "Loan decisions need attention",
           message: `${adminState.overview?.pendingLoansCount ?? 0} loan applications are pending review.`,
@@ -351,7 +418,7 @@ export default function NotificationsCenter() {
         (order) => order.status === "delivered" && order.payment_status !== "paid",
       );
       if (unpaidDeliveredOrders.length) {
-        items.push({
+        roleItems.push({
           id: "admin-payments",
           title: "Delivered orders need payment follow-up",
           message: `${unpaidDeliveredOrders.length} delivered orders are not yet marked paid.`,
@@ -363,7 +430,7 @@ export default function NotificationsCenter() {
       }
     } else {
       if (!profile?.county) {
-        items.push({
+        roleItems.push({
           id: "profile-county",
           title: "Finish your profile setup",
           message: "Add your county so discovery, weather, and trade routing work more accurately.",
@@ -375,7 +442,7 @@ export default function NotificationsCenter() {
       }
 
       if (role !== "company" && !productsLoading && products.length === 0) {
-        items.push({
+        roleItems.push({
           id: "farmer-products",
           title: "Publish your first listing",
           message: "Listings make it easier for buyers and companies to discover your farm.",
@@ -388,7 +455,7 @@ export default function NotificationsCenter() {
 
       const pendingSellingOrders = sellingOrders.filter((order) => ["pending", "confirmed", "processing"].includes(order.status));
       if (pendingSellingOrders.length) {
-        items.push({
+        roleItems.push({
           id: "farmer-orders",
           title: "Orders are waiting on your next move",
           message: `${pendingSellingOrders.length} selling orders are still active and need attention.`,
@@ -403,7 +470,7 @@ export default function NotificationsCenter() {
         (order) => order.payment_status !== "paid" && ["confirmed", "processing", "shipped", "delivered"].includes(order.status),
       );
       if (unpaidBuyingOrders.length) {
-        items.push({
+        roleItems.push({
           id: "buyer-payments",
           title: "Some orders still need payment follow-up",
           message: `${unpaidBuyingOrders.length} purchase orders are active but not marked paid yet.`,
@@ -416,13 +483,26 @@ export default function NotificationsCenter() {
 
     }
 
-    return items;
-  }, [adminState.companies, adminState.orders, adminState.overview, buyingOrders, companyState, ordersLoading, products, productsLoading, profile?.county, role, sellingOrders]);
+    return [...persistedItems, ...roleItems];
+  }, [adminState.companies, adminState.orders, adminState.overview, buyingOrders, companyState, ordersLoading, products, productsLoading, profile?.county, role, sellingOrders, serverNotifications]);
 
   const filteredNotifications =
     activeFilter === "all" ? notifications : notifications.filter((notification) => notification.category === activeFilter);
 
   const highPriorityCount = notifications.filter((notification) => notification.priority === "high").length;
+  const unreadPersistedCount = notifications.filter((notification) => notification.persisted && !notification.readAt).length;
+
+  const markAllAsRead = async () => {
+    if (!unreadPersistedCount) return;
+    setMarkingAllRead(true);
+    try {
+      await apiFetch<{ updated: number }>("/notifications/read-all", { method: "PATCH" });
+      const now = new Date().toISOString();
+      setServerNotifications((prev) => prev.map((item) => (item.read_at ? item : { ...item, read_at: now })));
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
 
   return (
     <DashboardShell title="Notifications">
@@ -441,6 +521,7 @@ export default function NotificationsCenter() {
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Notification Summary</p>
             <p className="mt-2 font-display text-3xl font-bold text-foreground">{notifications.length}</p>
             <p className="mt-1 text-sm text-muted-foreground">High priority: {highPriorityCount}</p>
+            <p className="mt-1 text-sm text-muted-foreground">Unread alerts: {unreadPersistedCount}</p>
             <div className="mt-4 flex flex-wrap gap-2">
               {(["all", "action", "update", "info"] as const).map((filter) => (
                 <Button
@@ -455,11 +536,23 @@ export default function NotificationsCenter() {
                 </Button>
               ))}
             </div>
+            {unreadPersistedCount > 0 ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="mt-3 rounded-full"
+                onClick={() => void markAllAsRead()}
+                disabled={markingAllRead}
+              >
+                {markingAllRead ? "Marking..." : "Mark All Read"}
+              </Button>
+            ) : null}
           </div>
         </div>
       </section>
 
-      {loadingExtra || ordersLoading || productsLoading ? (
+      {loadingExtra || loadingServerNotifications || ordersLoading || productsLoading ? (
         <div className="rounded-[1.3rem] border border-border bg-card p-5 text-sm text-muted-foreground">Loading notifications...</div>
       ) : filteredNotifications.length === 0 ? (
         <div className="rounded-[1.5rem] border border-dashed border-border bg-card p-6 text-sm text-muted-foreground">
@@ -477,6 +570,11 @@ export default function NotificationsCenter() {
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-display text-lg font-bold text-foreground">{notification.title}</h3>
+                      {notification.persisted && !notification.readAt ? (
+                        <span className="rounded-full border border-sky-300 bg-sky-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-700">
+                          new
+                        </span>
+                      ) : null}
                       <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${priorityTone(notification.priority)}`}>
                         {notification.priority}
                       </span>
