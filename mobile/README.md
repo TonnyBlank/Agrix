@@ -2,6 +2,22 @@
 
 Native mobile app built with Expo, React Native, and TypeScript.
 
+## Environment
+
+Create `mobile/.env` from `.env.example`. The mobile app uses the same Supabase project and backend API as the web app:
+
+```bash
+EXPO_PUBLIC_API_URL=http://127.0.0.1:3001/api
+EXPO_PUBLIC_SUPABASE_URL=...
+EXPO_PUBLIC_SUPABASE_ANON_KEY=...
+```
+
+When using a connected Android device or emulator, expose the backend port:
+
+```bash
+adb reverse tcp:3001 tcp:3001
+```
+
 ## Run on Android
 
 1. Open Android Studio.
@@ -19,6 +35,6 @@ If Expo says port 8081 is already in use, accept the next port or stop the old E
 
 - Opens with a native-style login screen.
 - After sign-in, enters a bottom-tab mobile app.
-- Includes Home, Market, Loans, Chats, and Profile screens.
-
-The login is currently a UI flow only. The next step is connecting it to Supabase auth and the existing backend API.
+- Uses Supabase auth for real sign-in and sign-up.
+- Uses role-based mobile navigation that matches the web dashboard features.
+- Feature screens call the same backend endpoints as the web dashboard where a mobile implementation exists.

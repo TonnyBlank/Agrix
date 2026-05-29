@@ -1,7 +1,11 @@
+import type { Session } from '@supabase/supabase-js';
 import { StatusBar } from 'expo-status-bar';
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -10,40 +14,237 @@ import {
   View,
 } from 'react-native';
 
-type TabKey = 'home' | 'market' | 'loans' | 'messages' | 'profile';
+import {
+  type AppRole,
+  type MobileRoute,
+  type MobileRouteKey,
+  getVisibleRoutes,
+} from './src/config/navigation';
+import { apiFetch } from './src/lib/api';
+import { supabase } from './src/lib/supabase';
 
-type Tab = {
-  key: TabKey;
-  icon: string;
-  label: string;
-  title: string;
+type Profile = {
+  full_name?: string | null;
+  county?: string | null;
+  phone?: string | null;
+  plan_expires_at?: string | null;
 };
 
-const tabs: Tab[] = [
-  { key: 'home', icon: 'H', label: 'Home', title: 'Home' },
-  { key: 'market', icon: 'M', label: 'Market', title: 'Market' },
-  { key: 'loans', icon: 'L', label: 'Loans', title: 'Loans' },
-  { key: 'messages', icon: 'C', label: 'Chats', title: 'Chats' },
-  { key: 'profile', icon: 'P', label: 'Profile', title: 'Profile' },
-];
+type ProfileResponse = {
+  profile: Profile;
+  role: AppRole | null;
+};
 
-const produce = [
-  { crop: 'Tomatoes', meta: 'Kirinyaga - 30 crates', price: 'KES 4,200' },
-  { crop: 'Maize', meta: 'Uasin Gishu - 12 bags', price: 'KES 3,150' },
-  { crop: 'Avocados', meta: 'Muranga - 80 kg', price: 'KES 6,800' },
-];
+const bottomKeys: MobileRouteKey[] = ['dashboard', 'marketplace', 'microLoans', 'messages', 'profile'];
 
 export default function App() {
-  const [isSignedIn, setIsSignedIn] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabKey>('home');
-  const currentTab = useMemo(
-    () => tabs.find((tab) => tab.key === activeTab) ?? tabs[0],
-    [activeTab],
-  );
+  const [session, setSession] = useState<Session | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [role, setRole] = useState<AppRole | null>(null);
+  const [activeKey, setActiveKey] = useState<MobileRouteKey>('dashboard');
+  const [loadingAuth, setLoadingAuth] = useState(true);
 
-  if (!isSignedIn) {
-    return <LoginScreen onSignIn={() => setIsSignedIn(true)} />;
+  const loadProfile = useCallback(async () => {
+    const data = await apiFetch<ProfileResponse>('/profiles/me');
+    setProfile(data.profile);
+    setRole(data.role ?? 'farmer_free');
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (!mounted) return;
+      setSession(data.session);
+      if (data.session) {
+        try {
+          await loadProfile();
+        } catch (error) {
+          console.warn(error);
+        }
+      }
+      setLoadingAuth(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession) {
+        await loadProfile();
+      } else {
+        setProfile(null);
+        setRole(null);
+        setActiveKey('dashboard');
+      }
+      setLoadingAuth(false);
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [loadProfile]);
+
+  if (loadingAuth) {
+    return (
+      <SafeAreaView style={styles.loadingScreen}>
+        <ActivityIndicator color="#2f6b3f" size="large" />
+        <Text style={styles.loadingText}>Opening AgriLink X</Text>
+      </SafeAreaView>
+    );
   }
+
+  if (!session) {
+    return <AuthScreen />;
+  }
+
+  return (
+    <MobileShell
+      activeKey={activeKey}
+      profile={profile}
+      role={role}
+      setActiveKey={setActiveKey}
+      refreshProfile={loadProfile}
+    />
+  );
+}
+
+function AuthScreen() {
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const submit = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Missing details', 'Enter your email and password.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      if (mode === 'signin') {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { full_name: fullName.trim() } },
+        });
+        if (error) throw error;
+        Alert.alert('Account created', 'Check your email if confirmation is required.');
+      }
+    } catch (error) {
+      Alert.alert('Authentication failed', error instanceof Error ? error.message : 'Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.authSafeArea}>
+      <StatusBar style="light" />
+      <View style={styles.authScreen}>
+        <View>
+          <View style={styles.logoMark}>
+            <Text style={styles.logoText}>A</Text>
+          </View>
+          <Text style={styles.authTitle}>AgriLink X</Text>
+          <Text style={styles.authSubtitle}>Use the same account and data as the web platform.</Text>
+        </View>
+
+        <View style={styles.authPanel}>
+          <View style={styles.segmented}>
+            <Pressable
+              onPress={() => setMode('signin')}
+              style={[styles.segmentButton, mode === 'signin' && styles.segmentActive]}
+            >
+              <Text style={[styles.segmentText, mode === 'signin' && styles.segmentTextActive]}>
+                Sign in
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setMode('signup')}
+              style={[styles.segmentButton, mode === 'signup' && styles.segmentActive]}
+            >
+              <Text style={[styles.segmentText, mode === 'signup' && styles.segmentTextActive]}>
+                Create
+              </Text>
+            </Pressable>
+          </View>
+
+          {mode === 'signup' && (
+            <TextInput
+              placeholder="Full name"
+              placeholderTextColor="#7a8276"
+              value={fullName}
+              onChangeText={setFullName}
+              style={styles.input}
+            />
+          )}
+          <TextInput
+            autoCapitalize="none"
+            keyboardType="email-address"
+            placeholder="Email address"
+            placeholderTextColor="#7a8276"
+            value={email}
+            onChangeText={setEmail}
+            style={styles.input}
+          />
+          <TextInput
+            placeholder="Password"
+            placeholderTextColor="#7a8276"
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+            style={styles.input}
+          />
+
+          <Pressable onPress={submit} disabled={submitting} style={styles.primaryButton}>
+            {submitting ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>
+                {mode === 'signin' ? 'Sign in' : 'Create account'}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function MobileShell({
+  activeKey,
+  profile,
+  role,
+  setActiveKey,
+  refreshProfile,
+}: {
+  activeKey: MobileRouteKey;
+  profile: Profile | null;
+  role: AppRole | null;
+  setActiveKey: (key: MobileRouteKey) => void;
+  refreshProfile: () => Promise<void>;
+}) {
+  const routes = useMemo(() => getVisibleRoutes(role), [role]);
+  const activeRoute = routes.find((route) => route.key === activeKey) ?? routes[0];
+  const bottomRoutes = bottomKeys
+    .map((key) => routes.find((route) => route.key === key))
+    .filter(Boolean) as MobileRoute[];
+
+  useEffect(() => {
+    if (!routes.some((route) => route.key === activeKey)) {
+      setActiveKey('dashboard');
+    }
+  }, [activeKey, routes, setActiveKey]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -52,38 +253,43 @@ export default function App() {
         <View style={styles.header}>
           <View>
             <Text style={styles.brand}>AgriLink X</Text>
-            <Text style={styles.headerTitle}>{currentTab.title}</Text>
+            <Text style={styles.headerTitle}>{activeRoute.title}</Text>
           </View>
-          <Pressable style={styles.iconButton}>
-            <Text style={styles.iconButtonText}>S</Text>
-          </Pressable>
+          <View style={styles.rolePill}>
+            <Text style={styles.roleText}>{formatRole(role)}</Text>
+          </View>
         </View>
 
         <ScrollView
           contentContainerStyle={styles.content}
+          refreshControl={<RefreshControl refreshing={false} onRefresh={refreshProfile} />}
           showsVerticalScrollIndicator={false}
         >
-          {activeTab === 'home' && <HomeScreen />}
-          {activeTab === 'market' && <MarketScreen />}
-          {activeTab === 'loans' && <LoansScreen />}
-          {activeTab === 'messages' && <MessagesScreen />}
-          {activeTab === 'profile' && <ProfileScreen onSignOut={() => setIsSignedIn(false)} />}
+          {activeRoute.key === 'dashboard' ? (
+            <DashboardScreen profile={profile} role={role} routes={routes} setActiveKey={setActiveKey} />
+          ) : activeRoute.key === 'profile' ? (
+            <ProfileScreen profile={profile} role={role} />
+          ) : activeRoute.endpoint ? (
+            <ConnectedScreen route={activeRoute} />
+          ) : (
+            <ComingSoonScreen route={activeRoute} />
+          )}
         </ScrollView>
 
         <View style={styles.tabBar}>
-          {tabs.map((tab) => {
-            const isActive = tab.key === activeTab;
+          {bottomRoutes.map((route) => {
+            const active = route.key === activeRoute.key;
             return (
               <Pressable
-                key={tab.key}
-                onPress={() => setActiveTab(tab.key)}
-                style={[styles.tabButton, isActive && styles.activeTabButton]}
+                key={route.key}
+                onPress={() => setActiveKey(route.key)}
+                style={[styles.tabButton, active && styles.tabButtonActive]}
               >
-                <Text style={[styles.tabIcon, isActive && styles.activeTabText]}>
-                  {tab.icon}
+                <Text style={[styles.tabInitial, active && styles.tabActiveText]}>
+                  {route.title.slice(0, 1)}
                 </Text>
-                <Text style={[styles.tabText, isActive && styles.activeTabText]}>
-                  {tab.label}
+                <Text style={[styles.tabText, active && styles.tabActiveText]} numberOfLines={1}>
+                  {shortLabel(route.title)}
                 </Text>
               </Pressable>
             );
@@ -94,237 +300,300 @@ export default function App() {
   );
 }
 
-function LoginScreen({ onSignIn }: { onSignIn: () => void }) {
-  return (
-    <SafeAreaView style={styles.loginSafeArea}>
-      <StatusBar style="light" />
-      <View style={styles.loginScreen}>
-        <View style={styles.loginTop}>
-          <View style={styles.logoMark}>
-            <Text style={styles.logoText}>A</Text>
-          </View>
-          <Text style={styles.loginTitle}>AgriLink X</Text>
-          <Text style={styles.loginSubtitle}>Farm trade, loans, and updates in one app.</Text>
-        </View>
+function DashboardScreen({
+  profile,
+  role,
+  routes,
+  setActiveKey,
+}: {
+  profile: Profile | null;
+  role: AppRole | null;
+  routes: MobileRoute[];
+  setActiveKey: (key: MobileRouteKey) => void;
+}) {
+  const grouped = routes.reduce<Record<string, MobileRoute[]>>((acc, route) => {
+    if (route.key === 'dashboard') return acc;
+    acc[route.section] = [...(acc[route.section] ?? []), route];
+    return acc;
+  }, {});
 
-        <View style={styles.loginPanel}>
-          <Text style={styles.formTitle}>Sign in</Text>
-          <TextInput
-            autoCapitalize="none"
-            keyboardType="email-address"
-            placeholder="Email address"
-            placeholderTextColor="#7a8276"
-            style={styles.input}
-          />
-          <TextInput
-            placeholder="Password"
-            placeholderTextColor="#7a8276"
-            secureTextEntry
-            style={styles.input}
-          />
-
-          <Pressable onPress={onSignIn} style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>Sign in</Text>
-          </Pressable>
-
-          <Pressable style={styles.secondaryButton}>
-            <Text style={styles.secondaryButtonText}>Create account</Text>
-          </Pressable>
-        </View>
-      </View>
-    </SafeAreaView>
-  );
-}
-
-function HomeScreen() {
   return (
     <View style={styles.screen}>
       <View style={styles.heroPanel}>
-        <Text style={styles.panelLabel}>Today</Text>
-        <Text style={styles.bigNumber}>KES 128,400</Text>
-        <Text style={styles.panelNote}>Farm income this month</Text>
+        <Text style={styles.panelLabel}>Welcome</Text>
+        <Text style={styles.bigName}>{profile?.full_name || 'AgriLink User'}</Text>
+        <Text style={styles.panelNote}>{formatRole(role)} - {profile?.county || 'County not set'}</Text>
       </View>
 
-      <View style={styles.actionGrid}>
-        <AppButton label="Sell produce" />
-        <AppButton label="Request loan" variant="light" />
-      </View>
-
-      <SectionTitle title="Tasks" />
-      <ListRow title="Confirm tomato pickup" detail="Today, 3:30 PM" />
-      <ListRow title="Upload farm verification" detail="Required for loan review" />
-      <ListRow title="Reply to GreenMart" detail="New buyer message" />
-    </View>
-  );
-}
-
-function MarketScreen() {
-  return (
-    <View style={styles.screen}>
-      <View style={styles.actionGrid}>
-        <AppButton label="Add product" />
-        <AppButton label="My listings" variant="light" />
-      </View>
-
-      <SectionTitle title="Produce market" />
-      {produce.map((item) => (
-        <ListRow
-          key={item.crop}
-          title={item.crop}
-          detail={item.meta}
-          trailing={item.price}
-        />
+      {Object.entries(grouped).map(([section, items]) => (
+        <View key={section}>
+          <Text style={styles.sectionTitle}>{section}</Text>
+          <View style={styles.grid}>
+            {items.map((route) => (
+              <Pressable key={route.key} onPress={() => setActiveKey(route.key)} style={styles.gridButton}>
+                <Text style={styles.gridInitial}>{route.title.slice(0, 1)}</Text>
+                <Text style={styles.gridText}>{route.title}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
       ))}
     </View>
   );
 }
 
-function LoansScreen() {
-  return (
-    <View style={styles.screen}>
-      <View style={styles.heroPanel}>
-        <Text style={styles.panelLabel}>Eligible amount</Text>
-        <Text style={styles.bigNumber}>KES 75,000</Text>
-        <Text style={styles.panelNote}>Based on orders, profile, and verification</Text>
+function ConnectedScreen({ route }: { route: MobileRoute }) {
+  const [data, setData] = useState<unknown>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!route.endpoint) return;
+    setLoading(true);
+    setError(null);
+    try {
+      setData(await apiFetch<unknown>(route.endpoint));
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load data.');
+    } finally {
+      setLoading(false);
+    }
+  }, [route.endpoint]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading) {
+    return <StateMessage title="Loading" detail={`Loading ${route.title.toLowerCase()}...`} />;
+  }
+
+  if (error) {
+    return (
+      <View style={styles.screen}>
+        <StateMessage title="Could not load" detail={error} />
+        <Pressable onPress={load} style={styles.primaryButton}>
+          <Text style={styles.primaryButtonText}>Try again</Text>
+        </Pressable>
       </View>
-      <AppButton label="Start application" />
-      <SectionTitle title="Loan steps" />
-      <ListRow title="Verify identity" detail="Ready" />
-      <ListRow title="Choose offer" detail="Locked until verification is complete" />
-      <ListRow title="Track decision" detail="Updates appear here" />
-    </View>
-  );
-}
+    );
+  }
 
-function MessagesScreen() {
+  const rows = normalizeRows(data);
+
   return (
     <View style={styles.screen}>
-      <SectionTitle title="Inbox" />
-      <ListRow title="GreenMart Procurement" detail="Can you deliver 20 crates tomorrow?" />
-      <ListRow title="County Admin" detail="Verification review is in progress" />
-      <ListRow title="AgriLink Support" detail="Loan document received" />
+      <Text style={styles.sectionTitle}>Live data</Text>
+      {rows.length === 0 ? (
+        <StateMessage title="Nothing here yet" detail="When data is available on the web platform, it will appear here too." />
+      ) : (
+        rows.slice(0, 30).map((item, index) => (
+          <DataRow key={`${route.key}-${index}`} item={item} />
+        ))
+      )}
     </View>
   );
 }
 
-function ProfileScreen({ onSignOut }: { onSignOut: () => void }) {
+function ComingSoonScreen({ route }: { route: MobileRoute }) {
+  return (
+    <StateMessage
+      title={route.title}
+      detail="This web feature is listed in mobile navigation. The next step is adding its full mobile form and action flow."
+    />
+  );
+}
+
+function ProfileScreen({ profile, role }: { profile: Profile | null; role: AppRole | null }) {
+  const signOut = async () => {
+    await supabase.auth.signOut();
+  };
+
   return (
     <View style={styles.screen}>
       <View style={styles.profilePanel}>
-        <View style={styles.profileAvatar}>
-          <Text style={styles.profileAvatarText}>A</Text>
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>{(profile?.full_name || 'A').slice(0, 1).toUpperCase()}</Text>
         </View>
-        <View>
-          <Text style={styles.profileName}>AgriLink User</Text>
-          <Text style={styles.mutedText}>Farmer Pro</Text>
+        <View style={styles.profileText}>
+          <Text style={styles.profileName}>{profile?.full_name || 'AgriLink User'}</Text>
+          <Text style={styles.mutedText}>{formatRole(role)}</Text>
         </View>
       </View>
-
-      <SectionTitle title="Settings" />
-      <ListRow title="Verification" detail="Pending review" />
-      <ListRow title="County" detail="Not set" />
-      <ListRow title="Payout method" detail="Add M-Pesa or bank details" />
-
-      <Pressable onPress={onSignOut} style={styles.dangerButton}>
+      <DataRow item={{ title: 'County', detail: profile?.county || 'Not set' }} />
+      <DataRow item={{ title: 'Phone', detail: profile?.phone || 'Not set' }} />
+      <DataRow item={{ title: 'Plan expires', detail: profile?.plan_expires_at || 'Not set' }} />
+      <Pressable onPress={signOut} style={styles.dangerButton}>
         <Text style={styles.dangerButtonText}>Sign out</Text>
       </Pressable>
     </View>
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
-  return <Text style={styles.sectionTitle}>{title}</Text>;
-}
-
-function AppButton({ label, variant = 'solid' }: { label: string; variant?: 'solid' | 'light' }) {
-  const isLight = variant === 'light';
-
+function StateMessage({ title, detail }: { title: string; detail: string }) {
   return (
-    <Pressable style={[styles.appButton, isLight && styles.lightButton]}>
-      <Text style={[styles.appButtonText, isLight && styles.lightButtonText]}>{label}</Text>
-    </Pressable>
+    <View style={styles.statePanel}>
+      <Text style={styles.stateTitle}>{title}</Text>
+      <Text style={styles.stateDetail}>{detail}</Text>
+    </View>
   );
 }
 
-function ListRow({
-  title,
-  detail,
-  trailing,
-}: {
-  title: string;
-  detail: string;
-  trailing?: string;
-}) {
+function DataRow({ item }: { item: { title: string; detail: string; meta?: string } }) {
   return (
-    <Pressable style={styles.listRow}>
+    <View style={styles.dataRow}>
       <View style={styles.rowMarker} />
-      <View style={styles.rowText}>
-        <Text style={styles.rowTitle}>{title}</Text>
-        <Text style={styles.rowDetail}>{detail}</Text>
+      <View style={styles.rowBody}>
+        <Text style={styles.rowTitle}>{item.title}</Text>
+        <Text style={styles.rowDetail}>{item.detail}</Text>
+        {item.meta ? <Text style={styles.rowMeta}>{item.meta}</Text> : null}
       </View>
-      <Text style={styles.rowTrailing}>{trailing ?? '>'}</Text>
-    </Pressable>
+    </View>
   );
+}
+
+function normalizeRows(data: unknown): Array<{ title: string; detail: string; meta?: string }> {
+  const value = unwrapData(data);
+  const rows = Array.isArray(value) ? value : value && typeof value === 'object' ? [value] : [];
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object') {
+      return { title: String(row), detail: '' };
+    }
+
+    const record = row as Record<string, unknown>;
+    const title =
+      firstText(record, ['title', 'name', 'full_name', 'company_name', 'product_name', 'crop_name', 'status']) ||
+      firstText(record, ['id']) ||
+      'Record';
+    const detail =
+      firstText(record, ['description', 'message', 'email', 'county', 'category', 'role', 'payment_status']) ||
+      summarizeRecord(record);
+    const meta = firstText(record, ['created_at', 'updated_at', 'amount', 'price', 'total_amount']);
+
+    return { title, detail, meta };
+  });
+}
+
+function unwrapData(data: unknown): unknown {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
+  const record = data as Record<string, unknown>;
+  const keys = ['products', 'orders', 'requests', 'partners', 'companies', 'notifications', 'conversations', 'applications', 'profile'];
+  for (const key of keys) {
+    if (key in record) return record[key];
+  }
+  return data;
+}
+
+function firstText(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value;
+    if (typeof value === 'number') return String(value);
+  }
+  return '';
+}
+
+function summarizeRecord(record: Record<string, unknown>) {
+  return Object.entries(record)
+    .filter(([, value]) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+    .slice(0, 3)
+    .map(([key, value]) => `${key}: ${String(value)}`)
+    .join(' - ');
+}
+
+function formatRole(role: AppRole | null) {
+  if (role === 'farmer_pro') return 'Farmer Pro';
+  if (role === 'farmer_free') return 'Free';
+  if (role === 'company') return 'Company';
+  if (role === 'admin') return 'Admin';
+  return 'Free';
+}
+
+function shortLabel(title: string) {
+  if (title === 'Marketplace') return 'Market';
+  if (title === 'Micro-Loans') return 'Loans';
+  if (title === 'Profile & Settings') return 'Profile';
+  return title;
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
+  loadingScreen: {
+    alignItems: 'center',
     backgroundColor: '#f6f7f2',
-  },
-  app: {
     flex: 1,
-    backgroundColor: '#f6f7f2',
+    justifyContent: 'center',
   },
-  loginSafeArea: {
-    flex: 1,
+  loadingText: {
+    color: '#2f6b3f',
+    fontSize: 15,
+    fontWeight: '800',
+    marginTop: 12,
+  },
+  authSafeArea: {
     backgroundColor: '#183623',
+    flex: 1,
   },
-  loginScreen: {
+  authScreen: {
     flex: 1,
     justifyContent: 'space-between',
     padding: 22,
   },
-  loginTop: {
-    paddingTop: 38,
-  },
   logoMark: {
     alignItems: 'center',
     backgroundColor: '#d9f0c8',
-    borderRadius: 20,
-    height: 54,
+    borderRadius: 8,
+    height: 56,
     justifyContent: 'center',
-    width: 54,
+    width: 56,
   },
   logoText: {
     color: '#24552f',
     fontSize: 26,
     fontWeight: '900',
   },
-  loginTitle: {
+  authTitle: {
     color: '#ffffff',
     fontSize: 34,
     fontWeight: '900',
     marginTop: 22,
   },
-  loginSubtitle: {
+  authSubtitle: {
     color: '#d9e7d8',
     fontSize: 16,
     lineHeight: 23,
     marginTop: 8,
-    maxWidth: 280,
+    maxWidth: 300,
   },
-  loginPanel: {
+  authPanel: {
     backgroundColor: '#ffffff',
     borderRadius: 8,
     gap: 12,
     padding: 18,
   },
-  formTitle: {
-    color: '#162016',
-    fontSize: 22,
+  segmented: {
+    backgroundColor: '#eef2ea',
+    borderRadius: 8,
+    flexDirection: 'row',
+    padding: 4,
+  },
+  segmentButton: {
+    alignItems: 'center',
+    borderRadius: 6,
+    flex: 1,
+    height: 42,
+    justifyContent: 'center',
+  },
+  segmentActive: {
+    backgroundColor: '#ffffff',
+  },
+  segmentText: {
+    color: '#687365',
+    fontSize: 14,
     fontWeight: '900',
-    marginBottom: 2,
+  },
+  segmentTextActive: {
+    color: '#2f6b3f',
   },
   input: {
     backgroundColor: '#f6f7f2',
@@ -335,90 +604,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     height: 52,
     paddingHorizontal: 14,
-  },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 10,
-  },
-  brand: {
-    color: '#2f6b3f',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  headerTitle: {
-    color: '#162016',
-    fontSize: 30,
-    fontWeight: '900',
-  },
-  iconButton: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#dfe5d8',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 42,
-    justifyContent: 'center',
-    width: 42,
-  },
-  iconButtonText: {
-    color: '#2f6b3f',
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingBottom: 104,
-  },
-  screen: {
-    gap: 14,
-  },
-  heroPanel: {
-    backgroundColor: '#203d2b',
-    borderRadius: 8,
-    padding: 18,
-  },
-  panelLabel: {
-    color: '#cfe4d0',
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  bigNumber: {
-    color: '#ffffff',
-    fontSize: 34,
-    fontWeight: '900',
-    marginTop: 8,
-  },
-  panelNote: {
-    color: '#e8f1e7',
-    fontSize: 14,
-    marginTop: 7,
-  },
-  actionGrid: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  appButton: {
-    alignItems: 'center',
-    backgroundColor: '#2f6b3f',
-    borderRadius: 8,
-    flex: 1,
-    height: 52,
-    justifyContent: 'center',
-  },
-  appButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  lightButton: {
-    backgroundColor: '#e8f3df',
-  },
-  lightButtonText: {
-    color: '#255833',
   },
   primaryButton: {
     alignItems: 'center',
@@ -432,26 +617,124 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
   },
-  secondaryButton: {
-    alignItems: 'center',
-    borderColor: '#cfd8ca',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 52,
-    justifyContent: 'center',
+  safeArea: {
+    backgroundColor: '#f6f7f2',
+    flex: 1,
   },
-  secondaryButtonText: {
+  app: {
+    backgroundColor: '#f6f7f2',
+    flex: 1,
+  },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+  },
+  brand: {
     color: '#2f6b3f',
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: '900',
+  },
+  headerTitle: {
+    color: '#162016',
+    fontSize: 29,
+    fontWeight: '900',
+  },
+  rolePill: {
+    backgroundColor: '#e8f3df',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  roleText: {
+    color: '#2f6b3f',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  content: {
+    paddingBottom: 104,
+    paddingHorizontal: 20,
+  },
+  screen: {
+    gap: 14,
+  },
+  heroPanel: {
+    backgroundColor: '#203d2b',
+    borderRadius: 8,
+    padding: 18,
+  },
+  panelLabel: {
+    color: '#cfe4d0',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  bigName: {
+    color: '#ffffff',
+    fontSize: 28,
+    fontWeight: '900',
+    marginTop: 8,
+  },
+  panelNote: {
+    color: '#e8f1e7',
+    fontSize: 14,
+    marginTop: 7,
   },
   sectionTitle: {
     color: '#162016',
     fontSize: 17,
     fontWeight: '900',
-    marginTop: 2,
+    marginBottom: 10,
+    marginTop: 4,
   },
-  listRow: {
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  gridButton: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderColor: '#dfe5d8',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    minHeight: 86,
+    padding: 12,
+    width: '48%',
+  },
+  gridInitial: {
+    color: '#2f6b3f',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  gridText: {
+    color: '#162016',
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  statePanel: {
+    backgroundColor: '#ffffff',
+    borderColor: '#dfe5d8',
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 18,
+  },
+  stateTitle: {
+    color: '#162016',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  stateDetail: {
+    color: '#687365',
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 8,
+  },
+  dataRow: {
     alignItems: 'center',
     backgroundColor: '#ffffff',
     borderColor: '#dfe5d8',
@@ -468,7 +751,7 @@ const styles = StyleSheet.create({
     marginRight: 12,
     width: 12,
   },
-  rowText: {
+  rowBody: {
     flex: 1,
   },
   rowTitle: {
@@ -482,11 +765,11 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 3,
   },
-  rowTrailing: {
+  rowMeta: {
     color: '#2f6b3f',
-    fontSize: 14,
-    fontWeight: '900',
-    marginLeft: 10,
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 4,
   },
   profilePanel: {
     alignItems: 'center',
@@ -498,18 +781,21 @@ const styles = StyleSheet.create({
     gap: 14,
     padding: 16,
   },
-  profileAvatar: {
+  avatar: {
     alignItems: 'center',
     backgroundColor: '#e8f3df',
-    borderRadius: 30,
+    borderRadius: 8,
     height: 60,
     justifyContent: 'center',
     width: 60,
   },
-  profileAvatarText: {
+  avatarText: {
     color: '#2f6b3f',
     fontSize: 24,
     fontWeight: '900',
+  },
+  profileText: {
+    flex: 1,
   },
   profileName: {
     color: '#162016',
@@ -541,9 +827,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 5,
     left: 0,
+    paddingBottom: 12,
     paddingHorizontal: 10,
     paddingTop: 8,
-    paddingBottom: 12,
     position: 'absolute',
     right: 0,
   },
@@ -554,10 +840,10 @@ const styles = StyleSheet.create({
     height: 58,
     justifyContent: 'center',
   },
-  activeTabButton: {
+  tabButtonActive: {
     backgroundColor: '#edf6e8',
   },
-  tabIcon: {
+  tabInitial: {
     color: '#687365',
     fontSize: 17,
     fontWeight: '900',
@@ -568,7 +854,7 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginTop: 2,
   },
-  activeTabText: {
+  tabActiveText: {
     color: '#2f6b3f',
   },
 });
