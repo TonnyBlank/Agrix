@@ -37,6 +37,42 @@ type ProfileResponse = {
 
 const bottomKeys: MobileRouteKey[] = ['dashboard', 'marketplace', 'microLoans', 'messages', 'profile'];
 
+const routeDescriptions: Partial<Record<MobileRouteKey, string>> = {
+  performance: 'Revenue, orders, listings, and operational performance.',
+  farm: 'Farm profile, county, crops, and field information.',
+  products: 'Create and manage produce listings shown to buyers.',
+  marketplace: 'Browse available produce and company products.',
+  cart: 'Review selected items before checkout.',
+  messages: 'Buyer, company, admin, and support conversations.',
+  orders: 'Track buying and selling order workflows.',
+  notifications: 'Important account, order, loan, and admin updates.',
+  activity: 'Recent movement across your AgriLink account.',
+  discover: 'Companies, procurement requests, and farmer opportunities.',
+  scanner: 'AI crop health checks and field diagnosis.',
+  calendar: 'Crop events, reminders, and planting windows.',
+  dealMatches: 'Buyer opportunities matched to your listings.',
+  community: 'Farmer and buyer network activity.',
+  microLoans: 'Loan applications, status, and repayments.',
+  upgrade: 'Unlock Pro tools, scanner, and finance workflows.',
+  companyHub: 'Company profile, verification, and operating summary.',
+  companyProducts: 'Company product catalogue management.',
+  companyPartners: 'Farmer partners and sourcing relationships.',
+  companyOrders: 'Company-side marketplace order management.',
+  companyProcurement: 'Procurement requests and farmer responses.',
+  companySettings: 'Company profile and verification settings.',
+  adminOverview: 'Platform summary for users, orders, loans, and reviews.',
+  adminLoans: 'Loan offers available to farmers and companies.',
+  adminLoanDecisions: 'Review and decide submitted loan applications.',
+  adminTransactions: 'Order payments, delivery signoff, and payouts.',
+  adminDisputes: 'Resolve delivery and marketplace disputes.',
+  adminCompanies: 'Review and verify company accounts.',
+  adminVerifications: 'Review ID verification submissions.',
+  adminFeatureFlags: 'Control feature availability by user role.',
+  adminAuditLogs: 'Admin action history and platform audit trail.',
+  adminUsers: 'User roles and account summaries.',
+  profile: 'Personal profile, county, phone, plan, and sign out.',
+};
+
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -114,6 +150,7 @@ function AuthScreen() {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -121,6 +158,23 @@ function AuthScreen() {
     if (!email.trim() || !password.trim()) {
       Alert.alert('Missing details', 'Enter your email and password.');
       return;
+    }
+
+    if (mode === 'signup') {
+      if (!fullName.trim()) {
+        Alert.alert('Missing name', 'Enter your full name to create an account.');
+        return;
+      }
+
+      if (password.length < 6) {
+        Alert.alert('Password too short', 'Use at least 6 characters.');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        Alert.alert('Passwords do not match', 'Make sure both password fields are the same.');
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -138,7 +192,8 @@ function AuthScreen() {
           options: { data: { full_name: fullName.trim() } },
         });
         if (error) throw error;
-        Alert.alert('Account created', 'Check your email if confirmation is required.');
+        Alert.alert('Account created', 'Sign in with your email and password to continue.');
+        setMode('signin');
       }
     } catch (error) {
       Alert.alert('Authentication failed', error instanceof Error ? error.message : 'Try again.');
@@ -151,12 +206,24 @@ function AuthScreen() {
     <SafeAreaView style={styles.authSafeArea}>
       <StatusBar style="light" />
       <View style={styles.authScreen}>
-        <View>
-          <View style={styles.logoMark}>
-            <Text style={styles.logoText}>A</Text>
+        <View style={styles.authTop}>
+          <View style={styles.brandRow}>
+            <View style={styles.logoMark}>
+              <Text style={styles.logoText}>A</Text>
+            </View>
+            <View>
+              <Text style={styles.authBrand}>AgriLink X</Text>
+              <Text style={styles.authKicker}>Kenya agriculture platform</Text>
+            </View>
           </View>
-          <Text style={styles.authTitle}>AgriLink X</Text>
-          <Text style={styles.authSubtitle}>Use the same account and data as the web platform.</Text>
+          <Text style={styles.authTitle}>
+            {mode === 'signin' ? 'Welcome back' : 'Create your account'}
+          </Text>
+          <Text style={styles.authSubtitle}>
+            {mode === 'signin'
+              ? 'Sign in to access the same dashboard, marketplace, loans, and messages from the web platform.'
+              : 'Start with a free farmer account. Upgrade later when you need Pro tools and finance workflows.'}
+          </Text>
         </View>
 
         <View style={styles.authPanel}>
@@ -205,6 +272,16 @@ function AuthScreen() {
             onChangeText={setPassword}
             style={styles.input}
           />
+          {mode === 'signup' && (
+            <TextInput
+              placeholder="Confirm password"
+              placeholderTextColor="#7a8276"
+              secureTextEntry
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              style={styles.input}
+            />
+          )}
 
           <Pressable onPress={submit} disabled={submitting} style={styles.primaryButton}>
             {submitting ? (
@@ -215,6 +292,12 @@ function AuthScreen() {
               </Text>
             )}
           </Pressable>
+
+          <Text style={styles.authFootnote}>
+            {mode === 'signin'
+              ? 'Use the same email and password you use on the web app.'
+              : 'By creating an account, your profile is shared across web and mobile.'}
+          </Text>
         </View>
       </View>
     </SafeAreaView>
@@ -320,9 +403,25 @@ function DashboardScreen({
   return (
     <View style={styles.screen}>
       <View style={styles.heroPanel}>
-        <Text style={styles.panelLabel}>Welcome</Text>
+        <Text style={styles.panelLabel}>{formatRole(role).toUpperCase()}</Text>
         <Text style={styles.bigName}>{profile?.full_name || 'AgriLink User'}</Text>
-        <Text style={styles.panelNote}>{formatRole(role)} - {profile?.county || 'County not set'}</Text>
+        <Text style={styles.panelNote}>
+          {profile?.county || 'Set your county'} - Web and mobile use the same account data.
+        </Text>
+      </View>
+
+      <DashboardSummary role={role} />
+
+      <View style={styles.quickActions}>
+        <Pressable
+          onPress={() => setActiveKey(role === 'company' ? 'companyProducts' : 'products')}
+          style={styles.quickButton}
+        >
+          <Text style={styles.quickButtonText}>{role === 'company' ? 'Add product' : 'Add listing'}</Text>
+        </Pressable>
+        <Pressable onPress={() => setActiveKey('messages')} style={styles.quickButtonLight}>
+          <Text style={styles.quickButtonLightText}>Reply to buyers</Text>
+        </Pressable>
       </View>
 
       {Object.entries(grouped).map(([section, items]) => (
@@ -331,13 +430,97 @@ function DashboardScreen({
           <View style={styles.grid}>
             {items.map((route) => (
               <Pressable key={route.key} onPress={() => setActiveKey(route.key)} style={styles.gridButton}>
-                <Text style={styles.gridInitial}>{route.title.slice(0, 1)}</Text>
+                <View style={styles.gridIcon}>
+                  <Text style={styles.gridInitial}>{route.title.slice(0, 1)}</Text>
+                </View>
                 <Text style={styles.gridText}>{route.title}</Text>
+                <Text style={styles.gridDescription}>
+                  {routeDescriptions[route.key] || 'Open the matching web platform feature in mobile layout.'}
+                </Text>
               </Pressable>
             ))}
           </View>
         </View>
       ))}
+    </View>
+  );
+}
+
+function DashboardSummary({ role }: { role: AppRole | null }) {
+  const [summary, setSummary] = useState({
+    products: 0,
+    pendingOrders: 0,
+    unreadMessages: 0,
+    notifications: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [products, sellingOrders, buyingOrders, conversations, notifications] = await Promise.all([
+        apiFetch<unknown>('/products/mine').catch(() => []),
+        apiFetch<unknown>('/orders/selling').catch(() => []),
+        apiFetch<unknown>('/orders/buying').catch(() => []),
+        apiFetch<unknown>('/messages/conversations').catch(() => []),
+        apiFetch<unknown>('/notifications?limit=80').catch(() => []),
+      ]);
+
+      const orderRows = [...extractRows(sellingOrders), ...extractRows(buyingOrders)];
+      const pendingOrders = orderRows.filter((row) => {
+        if (!row || typeof row !== 'object') return false;
+        const status = String((row as Record<string, unknown>).status || '').toLowerCase();
+        return !['delivered', 'completed', 'cancelled', 'failed'].includes(status);
+      }).length;
+
+      setSummary({
+        products: extractRows(products).length,
+        pendingOrders,
+        unreadMessages: extractRows(conversations).length,
+        notifications: extractRows(notifications).length,
+      });
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Could not load dashboard summary.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const items = [
+    {
+      label: role === 'company' ? 'Products' : 'Active Listings',
+      value: summary.products,
+      helper: role === 'company' ? 'Company catalogue' : 'Visible to buyers',
+    },
+    { label: 'Pending Orders', value: summary.pendingOrders, helper: 'Need follow-up' },
+    { label: 'Messages', value: summary.unreadMessages, helper: 'Conversations' },
+    { label: 'Notifications', value: summary.notifications, helper: 'Latest updates' },
+  ];
+
+  return (
+    <View style={styles.summaryWrap}>
+      <View style={styles.summaryHeader}>
+        <Text style={styles.sectionTitle}>Summary</Text>
+        <Pressable onPress={load} style={styles.refreshButton}>
+          <Text style={styles.refreshButtonText}>{loading ? 'Loading' : 'Refresh'}</Text>
+        </Pressable>
+      </View>
+      {error ? <Text style={styles.inlineError}>{error}</Text> : null}
+      <View style={styles.summaryGrid}>
+        {items.map((item) => (
+          <View key={item.label} style={styles.summaryCard}>
+            <Text style={styles.summaryValue}>{loading ? '--' : item.value}</Text>
+            <Text style={styles.summaryLabel}>{item.label}</Text>
+            <Text style={styles.summaryHelper}>{item.helper}</Text>
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
@@ -453,8 +636,7 @@ function DataRow({ item }: { item: { title: string; detail: string; meta?: strin
 }
 
 function normalizeRows(data: unknown): Array<{ title: string; detail: string; meta?: string }> {
-  const value = unwrapData(data);
-  const rows = Array.isArray(value) ? value : value && typeof value === 'object' ? [value] : [];
+  const rows = extractRows(data);
 
   return rows.map((row) => {
     if (!row || typeof row !== 'object') {
@@ -473,6 +655,13 @@ function normalizeRows(data: unknown): Array<{ title: string; detail: string; me
 
     return { title, detail, meta };
   });
+}
+
+function extractRows(data: unknown): unknown[] {
+  const value = unwrapData(data);
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === 'object') return [value];
+  return [];
 }
 
 function unwrapData(data: unknown): unknown {
@@ -539,6 +728,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 22,
   },
+  authTop: {
+    gap: 22,
+    paddingTop: 20,
+  },
+  brandRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+  },
   logoMark: {
     alignItems: 'center',
     backgroundColor: '#d9f0c8',
@@ -552,11 +750,21 @@ const styles = StyleSheet.create({
     fontSize: 26,
     fontWeight: '900',
   },
+  authBrand: {
+    color: '#ffffff',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  authKicker: {
+    color: '#bcd5bd',
+    fontSize: 12,
+    fontWeight: '800',
+    marginTop: 2,
+  },
   authTitle: {
     color: '#ffffff',
     fontSize: 34,
     fontWeight: '900',
-    marginTop: 22,
   },
   authSubtitle: {
     color: '#d9e7d8',
@@ -616,6 +824,12 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 16,
     fontWeight: '900',
+  },
+  authFootnote: {
+    color: '#687365',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
   },
   safeArea: {
     backgroundColor: '#f6f7f2',
@@ -689,6 +903,91 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     marginTop: 4,
   },
+  summaryWrap: {
+    gap: 10,
+  },
+  summaryHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  refreshButton: {
+    backgroundColor: '#e8f3df',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  refreshButtonText: {
+    color: '#2f6b3f',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  inlineError: {
+    color: '#a13b2f',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  summaryCard: {
+    backgroundColor: '#ffffff',
+    borderColor: '#dfe5d8',
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 106,
+    padding: 14,
+    width: '48%',
+  },
+  summaryValue: {
+    color: '#203d2b',
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  summaryLabel: {
+    color: '#162016',
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 5,
+  },
+  summaryHelper: {
+    color: '#687365',
+    fontSize: 12,
+    lineHeight: 16,
+    marginTop: 3,
+  },
+  quickActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  quickButton: {
+    alignItems: 'center',
+    backgroundColor: '#2f6b3f',
+    borderRadius: 8,
+    flex: 1,
+    height: 52,
+    justifyContent: 'center',
+  },
+  quickButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  quickButtonLight: {
+    alignItems: 'center',
+    backgroundColor: '#e8f3df',
+    borderRadius: 8,
+    flex: 1,
+    height: 52,
+    justifyContent: 'center',
+  },
+  quickButtonLightText: {
+    color: '#2f6b3f',
+    fontSize: 14,
+    fontWeight: '900',
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -701,19 +1000,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
-    minHeight: 86,
+    minHeight: 142,
     padding: 12,
     width: '48%',
   },
+  gridIcon: {
+    alignItems: 'center',
+    backgroundColor: '#e8f3df',
+    borderRadius: 8,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
   gridInitial: {
     color: '#2f6b3f',
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '900',
   },
   gridText: {
     color: '#162016',
     fontSize: 13,
     fontWeight: '900',
+    textAlign: 'center',
+  },
+  gridDescription: {
+    color: '#687365',
+    fontSize: 11,
+    lineHeight: 15,
     textAlign: 'center',
   },
   statePanel: {

@@ -33,8 +33,9 @@ If Expo says port 8081 is already in use, accept the next port or stop the old E
 
 ## Current App Flow
 
-- Opens with a native-style login screen.
-- After sign-in, enters a bottom-tab mobile app.
+- Opens with a native-style sign-in/create-account screen that follows the web auth flow.
 - Uses Supabase auth for real sign-in and sign-up.
+- Shows a mobile dashboard summary for listings/products, pending orders, messages, and notifications.
 - Uses role-based mobile navigation that matches the web dashboard features.
 - Feature screens call the same backend endpoints as the web dashboard where a mobile implementation exists.
+- The goal is feature consistency with the web platform, presented as mobile screens instead of a web sidebar.
