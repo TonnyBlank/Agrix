@@ -881,6 +881,7 @@ const styles = StyleSheet.create({
   safeArea: {
     backgroundColor: '#f6f7f2',
     flex: 1,
+    paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight ?? 0 : 0,
   },
   app: {
     backgroundColor: '#f6f7f2',
