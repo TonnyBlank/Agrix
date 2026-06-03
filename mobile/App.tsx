@@ -41,6 +41,43 @@ type ProfileResponse = {
 
 const bottomKeys: MobileRouteKey[] = ['dashboard', 'marketplace', 'microLoans', 'messages', 'profile'];
 
+const tabIcons: Record<MobileRouteKey, keyof typeof Feather.glyphMap> = {
+  dashboard: 'home',
+  marketplace: 'shopping-bag',
+  microLoans: 'dollar-sign',
+  messages: 'message-circle',
+  profile: 'user',
+  performance: 'trending-up',
+  farm: 'map',
+  products: 'package',
+  cart: 'shopping-cart',
+  orders: 'clipboard',
+  notifications: 'bell',
+  activity: 'activity',
+  discover: 'compass',
+  scanner: 'camera',
+  calendar: 'calendar',
+  dealMatches: 'zap',
+  community: 'users',
+  upgrade: 'arrow-up-circle',
+  companyHub: 'briefcase',
+  companyProducts: 'package',
+  companyPartners: 'users',
+  companyOrders: 'clipboard',
+  companyProcurement: 'file-text',
+  companySettings: 'settings',
+  adminOverview: 'grid',
+  adminLoans: 'dollar-sign',
+  adminLoanDecisions: 'check-square',
+  adminTransactions: 'credit-card',
+  adminDisputes: 'alert-triangle',
+  adminCompanies: 'briefcase',
+  adminVerifications: 'shield',
+  adminFeatureFlags: 'flag',
+  adminAuditLogs: 'file-text',
+  adminUsers: 'users',
+};
+
 const routeDescriptions: Partial<Record<MobileRouteKey, string>> = {
   performance: 'Revenue, orders, listings, and operational performance.',
   farm: 'Farm profile, county, crops, and field information.',
