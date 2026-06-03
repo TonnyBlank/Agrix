@@ -409,14 +409,18 @@ function MobileShell({
               <Pressable
                 key={route.key}
                 onPress={() => setActiveKey(route.key)}
-                style={[styles.tabButton, active && styles.tabButtonActive]}
+                android_ripple={{ color: '#e8f3df', borderless: true }}
+                style={styles.tabButton}
               >
-                <Text style={[styles.tabInitial, active && styles.tabActiveText]}>
-                  {route.title.slice(0, 1)}
-                </Text>
+                <Feather
+                  name={tabIcons[route.key] ?? 'circle'}
+                  size={22}
+                  color={active ? '#2f6b3f' : '#7a8a7c'}
+                />
                 <Text style={[styles.tabText, active && styles.tabActiveText]} numberOfLines={1}>
                   {shortLabel(route.title)}
                 </Text>
+                {active ? <View style={styles.tabActiveDot} /> : null}
               </Pressable>
             );
           })}
