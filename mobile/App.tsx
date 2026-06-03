@@ -1,13 +1,16 @@
 import type { Session } from '@supabase/supabase-js';
 import { StatusBar } from 'expo-status-bar';
+import { Feather } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   RefreshControl,
   SafeAreaView,
   ScrollView,
+  StatusBar as RNStatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -37,6 +40,43 @@ type ProfileResponse = {
 };
 
 const bottomKeys: MobileRouteKey[] = ['dashboard', 'marketplace', 'microLoans', 'messages', 'profile'];
+
+const tabIcons: Record<MobileRouteKey, keyof typeof Feather.glyphMap> = {
+  dashboard: 'home',
+  marketplace: 'shopping-bag',
+  microLoans: 'dollar-sign',
+  messages: 'message-circle',
+  profile: 'user',
+  performance: 'trending-up',
+  farm: 'map',
+  products: 'package',
+  cart: 'shopping-cart',
+  orders: 'clipboard',
+  notifications: 'bell',
+  activity: 'activity',
+  discover: 'compass',
+  scanner: 'camera',
+  calendar: 'calendar',
+  dealMatches: 'zap',
+  community: 'users',
+  upgrade: 'arrow-up-circle',
+  companyHub: 'briefcase',
+  companyProducts: 'package',
+  companyPartners: 'users',
+  companyOrders: 'clipboard',
+  companyProcurement: 'file-text',
+  companySettings: 'settings',
+  adminOverview: 'grid',
+  adminLoans: 'dollar-sign',
+  adminLoanDecisions: 'check-square',
+  adminTransactions: 'credit-card',
+  adminDisputes: 'alert-triangle',
+  adminCompanies: 'briefcase',
+  adminVerifications: 'shield',
+  adminFeatureFlags: 'flag',
+  adminAuditLogs: 'file-text',
+  adminUsers: 'users',
+};
 
 const routeDescriptions: Partial<Record<MobileRouteKey, string>> = {
   performance: 'Revenue, orders, listings, and operational performance.',
@@ -369,14 +409,18 @@ function MobileShell({
               <Pressable
                 key={route.key}
                 onPress={() => setActiveKey(route.key)}
-                style={[styles.tabButton, active && styles.tabButtonActive]}
+                android_ripple={{ color: '#e8f3df', borderless: true }}
+                style={styles.tabButton}
               >
-                <Text style={[styles.tabInitial, active && styles.tabActiveText]}>
-                  {route.title.slice(0, 1)}
-                </Text>
+                <Feather
+                  name={tabIcons[route.key] ?? 'circle'}
+                  size={22}
+                  color={active ? '#2f6b3f' : '#7a8a7c'}
+                />
                 <Text style={[styles.tabText, active && styles.tabActiveText]} numberOfLines={1}>
                   {shortLabel(route.title)}
                 </Text>
+                {active ? <View style={styles.tabActiveDot} /> : null}
               </Pressable>
             );
           })}
@@ -837,6 +881,7 @@ const styles = StyleSheet.create({
   safeArea: {
     backgroundColor: '#f6f7f2',
     flex: 1,
+    paddingTop: Platform.OS === 'android' ? RNStatusBar.currentHeight ?? 0 : 0,
   },
   app: {
     backgroundColor: '#f6f7f2',
@@ -1137,38 +1182,40 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     backgroundColor: '#ffffff',
-    borderColor: '#dfe5d8',
+    borderColor: '#e3e8df',
     borderTopWidth: 1,
     bottom: 0,
+    elevation: 12,
     flexDirection: 'row',
-    gap: 5,
     left: 0,
-    paddingBottom: 12,
-    paddingHorizontal: 10,
-    paddingTop: 8,
+    paddingBottom: Platform.OS === 'ios' ? 22 : 12,
+    paddingHorizontal: 8,
+    paddingTop: 10,
     position: 'absolute',
     right: 0,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
   },
   tabButton: {
     alignItems: 'center',
-    borderRadius: 8,
     flex: 1,
-    height: 58,
+    gap: 4,
     justifyContent: 'center',
-  },
-  tabButtonActive: {
-    backgroundColor: '#edf6e8',
-  },
-  tabInitial: {
-    color: '#687365',
-    fontSize: 17,
-    fontWeight: '900',
+    paddingVertical: 4,
   },
   tabText: {
-    color: '#687365',
+    color: '#7a8a7c',
     fontSize: 11,
-    fontWeight: '900',
+    fontWeight: '700',
+  },
+  tabActiveDot: {
+    backgroundColor: '#2f6b3f',
+    borderRadius: 999,
+    height: 4,
     marginTop: 2,
+    width: 4,
   },
   tabActiveText: {
     color: '#2f6b3f',
