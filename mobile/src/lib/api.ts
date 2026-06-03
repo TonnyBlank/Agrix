@@ -4,8 +4,6 @@ const apiBaseUrl =
   process.env.EXPO_PUBLIC_API_URL ||
   'http://127.0.0.1:3001/api';
 
-export const API_BASE_URL = apiBaseUrl;
-
 export class ApiError extends Error {
   status: number;
 
@@ -16,29 +14,11 @@ export class ApiError extends Error {
   }
 }
 
-const ROLE_STORAGE_PREFIX = 'agrilink:active-role:';
+type ApiFetchInit = Omit<RequestInit, 'body'> & {
+  body?: unknown;
+};
 
-async function readStoredRole(userId: string): Promise<string | null> {
-  try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-    return await AsyncStorage.getItem(`${ROLE_STORAGE_PREFIX}${userId}`);
-  } catch {
-    return null;
-  }
-}
-
-export async function setStoredRole(userId: string, role: string | null) {
-  try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-    const key = `${ROLE_STORAGE_PREFIX}${userId}`;
-    if (role) await AsyncStorage.setItem(key, role);
-    else await AsyncStorage.removeItem(key);
-  } catch {
-    // ignore
-  }
-}
-
-export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function apiFetch<T>(path: string, init: ApiFetchInit = {}): Promise<T> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
@@ -50,10 +30,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   const headers = new Headers(init.headers);
   headers.set('Authorization', `Bearer ${session.access_token}`);
 
-  const storedRole = await readStoredRole(session.user.id);
-  if (storedRole) headers.set('X-AgriLink-Role', storedRole);
-
-  let body = init.body;
+  let body: BodyInit | null | undefined = init.body as BodyInit | null | undefined;
   if (body && typeof body === 'object' && !(body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
     body = JSON.stringify(body);
@@ -81,10 +58,6 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
       } catch {
         message = rawText;
       }
-    }
-
-    if (response.status === 401) {
-      await supabase.auth.signOut();
     }
 
     throw new ApiError(message, response.status);
