@@ -22,6 +22,7 @@ import {
 } from './src/config/navigation';
 import { apiFetch } from './src/lib/api';
 import { supabase } from './src/lib/supabase';
+import { MarketplaceScreen } from './src/screens/MarketplaceScreen';
 
 type Profile = {
   full_name?: string | null;
@@ -350,6 +351,8 @@ function MobileShell({
         >
           {activeRoute.key === 'dashboard' ? (
             <DashboardScreen profile={profile} role={role} routes={routes} setActiveKey={setActiveKey} />
+          ) : activeRoute.key === 'marketplace' ? (
+            <MarketplaceScreen viewerCounty={profile?.county} />
           ) : activeRoute.key === 'profile' ? (
             <ProfileScreen profile={profile} role={role} />
           ) : activeRoute.endpoint ? (
