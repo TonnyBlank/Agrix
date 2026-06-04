@@ -3,11 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build",
-    "build:dev": "cd frontend && npm run build:dev",
-    "preview": "cd frontend && npm run preview",
-    "lint": "cd frontend && npm run lint",
-    "test": "cd frontend && npm run test"
+    "dev": "cd frontend && ./node_modules/.bin/vite",
+    "build": "cd frontend && ./node_modules/.bin/vite build",
+    "build:dev": "cd frontend && ./node_modules/.bin/vite build --mode development",
+    "preview": "cd frontend && ./node_modules/.bin/vite preview",
+    "lint": "cd frontend && ./node_modules/.bin/eslint .",
+    "test": "cd frontend && ./node_modules/.bin/vitest run"
   }
 }
