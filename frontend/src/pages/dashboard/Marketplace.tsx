@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
-import { BadgeCheck, Heart, MapPin, MessageCircle, PackageCheck, Search, ShoppingCart, Sprout, Star, Video } from "lucide-react";
+import { Heart, MapPin, MessageCircle, PackageCheck, ShoppingCart, Sprout, Star, Video } from "lucide-react";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMarketplaceProducts, type Product } from "@/hooks/useProducts";
 import { useOrders } from "@/hooks/useOrders";
@@ -13,23 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-
-const categories = ["All", "Vegetables", "Fruits", "Grains", "Dairy", "Poultry", "Herbs"];
-const ALL_COUNTIES_FILTER = "__all_counties__";
-const MY_COUNTY_FILTER = "__my_county__";
-
-function getProductCounty(product: Product) {
-  return product.location || product.profiles?.county || null;
-}
-
-function isSameCounty(left: string | null | undefined, right: string | null | undefined) {
-  const normalizedLeft = normalizeLocationName(left);
-  const normalizedRight = normalizeLocationName(right);
-
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
+import { CartSummary } from "@/components/marketplace/CartSummary";
+import { MarketplaceFilters } from "@/components/marketplace/MarketplaceFilters";
+import { ProductCard } from "@/components/marketplace/ProductCard";
+import {
+  ALL_COUNTIES_FILTER, MY_COUNTY_FILTER,
+  getProductCounty, isSameCounty,
+} from "@/components/marketplace/utils";
 
 export default function Marketplace() {
   const { products, loading, toggleLike, rateProduct } = useMarketplaceProducts();
