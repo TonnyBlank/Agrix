@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
 import { Link, useNavigate } from "react-router-dom";
-import { BadgeCheck, Heart, MapPin, MessageCircle, PackageCheck, Search, ShoppingCart, Sprout, Star, Video } from "lucide-react";
+import { Heart, MapPin, MessageCircle, PackageCheck, ShoppingCart, Sprout, Star, Video } from "lucide-react";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMarketplaceProducts, type Product } from "@/hooks/useProducts";
 import { useOrders } from "@/hooks/useOrders";
@@ -13,23 +12,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-
-const categories = ["All", "Vegetables", "Fruits", "Grains", "Dairy", "Poultry", "Herbs"];
-const ALL_COUNTIES_FILTER = "__all_counties__";
-const MY_COUNTY_FILTER = "__my_county__";
-
-function getProductCounty(product: Product) {
-  return product.location || product.profiles?.county || null;
-}
-
-function isSameCounty(left: string | null | undefined, right: string | null | undefined) {
-  const normalizedLeft = normalizeLocationName(left);
-  const normalizedRight = normalizeLocationName(right);
-
-  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
-}
+import { CartSummary } from "@/components/marketplace/CartSummary";
+import { MarketplaceFilters } from "@/components/marketplace/MarketplaceFilters";
+import { ProductCard } from "@/components/marketplace/ProductCard";
+import {
+  ALL_COUNTIES_FILTER, MY_COUNTY_FILTER,
+  getProductCounty, isSameCounty,
+} from "@/components/marketplace/utils";
 
 export default function Marketplace() {
   const { products, loading, toggleLike, rateProduct } = useMarketplaceProducts();
@@ -315,21 +305,8 @@ export default function Marketplace() {
                 </p>
                 </div>
               </div>
-              <div className="w-full rounded-[1.5rem] border border-white/70 bg-white/80 p-4 shadow-sm dark:border-white/10 dark:bg-background/60 xl:max-w-xs">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">Cart Overview</p>
-                <p className="mt-2 font-display text-2xl font-bold text-foreground">{cartTotals.itemCount} items</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  KES {cartTotals.total.toLocaleString()} estimated total with delivery.
-                </p>
-                <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Button asChild variant="outline" className="rounded-xl">
-                    <Link to="/dashboard/cart">Open Cart</Link>
-                  </Button>
-                  <Button asChild className="rounded-xl">
-                    <Link to="/dashboard/orders">Orders</Link>
-                  </Button>
-                </div>
-              </div>
+              <CartSummary itemCount={cartTotals.itemCount} total={cartTotals.total} />
+            </div>
             </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -372,204 +349,39 @@ export default function Marketplace() {
           </div>
         </section>
 
-        <section className="rounded-[2rem] border border-border/70 bg-white/90 p-5 shadow-[0_18px_40px_-24px_rgba(15,23,42,0.2)] dark:bg-card/90 dark:shadow-[0_18px_40px_-24px_rgba(0,0,0,0.55)]">
-          <div className="flex flex-col gap-4">
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search products, farmers, or county..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="h-12 rounded-2xl border-white/70 bg-white/80 pl-10 shadow-sm dark:border-white/10 dark:bg-card/90"
-                />
-              </div>
-
-              <Select
-                value={countyFilter}
-                onValueChange={(value) => {
-                  setHasChosenCountyFilter(true);
-                  setCountyFilter(value);
-                }}
-              >
-                <SelectTrigger className="h-12 rounded-2xl bg-white/80 shadow-sm dark:bg-card/90">
-                  <SelectValue placeholder="Choose county view" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_COUNTIES_FILTER}>All counties</SelectItem>
-                  {viewerCounty && <SelectItem value={MY_COUNTY_FILTER}>My county ({viewerCounty})</SelectItem>}
-                  {availableCounties.map((county) => (
-                    <SelectItem key={county} value={county}>
-                      {county}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              {categories.map((category) => (
-                <button
-                  key={category}
-                  onClick={() => setActiveCategory(category)}
-                  className={`rounded-full px-4 py-2 text-xs font-semibold transition-all ${
-                    activeCategory === category
-                      ? "bg-primary text-primary-foreground shadow-glow-emerald"
-                      : "bg-white/80 text-muted-foreground ring-1 ring-border hover:bg-muted dark:bg-card/90 dark:hover:bg-muted/80"
-                  }`}
-                >
-                  {category}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-col gap-1 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                Showing <span className="font-semibold text-foreground">{filtered.length}</span> of{" "}
-                <span className="font-semibold text-foreground">{products.length}</span> listings
-                {effectiveCountyFilter ? ` in ${effectiveCountyFilter}` : " across all counties"}.
-              </p>
-              <p>
-                {viewerCounty
-                  ? isResolvingDistances
-                    ? "Calculating county distances..."
-                    : "Kilometre estimates are based on your location and seller county."
-                  : "Choose a county or set your own location to browse nearby produce faster."}
-              </p>
-            </div>
-          </div>
-        </section>
+        <MarketplaceFilters
+          search={search}
+          onSearchChange={setSearch}
+          activeCategory={activeCategory}
+          onCategoryChange={setActiveCategory}
+          countyFilter={countyFilter}
+          onCountyFilterChange={(value) => {
+            setHasChosenCountyFilter(true);
+            setCountyFilter(value);
+          }}
+          availableCounties={availableCounties}
+          viewerCounty={viewerCounty}
+          filteredCount={filtered.length}
+          totalCount={products.length}
+          effectiveCountyFilter={effectiveCountyFilter}
+          isResolvingDistances={isResolvingDistances}
+        />
 
         {loading ? (
           <div className="bento-card text-sm text-muted-foreground">Loading marketplace products...</div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {filtered.map((product, index) => {
-              const productCounty = getProductCounty(product);
-              const distanceLabel = getProductDistanceLabel(product);
-
-              return (
-                <motion.article
-                  key={product.id}
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: index * 0.03 }}
-                  className="group overflow-hidden rounded-[1.5rem] border border-border/70 bg-white/85 shadow-[0_18px_40px_-24px_rgba(15,23,42,0.35)] backdrop-blur dark:bg-card/90 dark:shadow-[0_18px_40px_-24px_rgba(0,0,0,0.6)]"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProduct(product)}
-                    className="block w-full text-left"
-                  >
-                    <div className="relative">
-                      {product.cover_image_url ? (
-                        <>
-                          <img
-                            src={product.cover_image_url}
-                            alt={product.name}
-                            className="aspect-[4/3] max-h-36 w-full bg-slate-950 object-cover"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/55 to-transparent" />
-                          <div className="absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full bg-black/60 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur">
-                            {product.video_url ? <Video className="h-3.5 w-3.5" /> : <ShoppingCart className="h-3.5 w-3.5" />}
-                            Tap to view and watch
-                          </div>
-                        </>
-                      ) : product.video_url ? (
-                        <>
-                          <video
-                            src={product.video_url}
-                            muted
-                            playsInline
-                            preload="metadata"
-                            className="aspect-[4/3] max-h-36 w-full bg-slate-950 object-cover"
-                          />
-                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/55 to-transparent" />
-                          <div className="absolute left-1/2 top-1/2 inline-flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full bg-black/60 px-3 py-1 text-[11px] font-semibold text-white backdrop-blur">
-                            <Video className="h-3.5 w-3.5" />
-                            Tap to view and watch
-                          </div>
-                        </>
-                      ) : (
-                        <div className="flex aspect-[4/3] items-center justify-center bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.28),_transparent_42%),linear-gradient(135deg,rgba(236,253,245,1),rgba(255,255,255,0.92))] text-7xl">
-                          {product.image_emoji || "Farm"}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="space-y-2.5 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h4 className="line-clamp-2 font-display text-base font-bold leading-snug text-foreground">{product.name}</h4>
-                          <p className="mt-1 text-xs text-muted-foreground">{product.category}</p>
-                        </div>
-                        {product.is_organic && (
-                          <span className="rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-                            Organic
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <MapPin className="h-4 w-4" />
-                        <span>{productCounty || "Unknown county"}</span>
-                      </div>
-
-                      {distanceLabel && (
-                        <div className="flex items-center gap-2">
-                          <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
-                            {distanceLabel}
-                          </span>
-                        </div>
-                      )}
-
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <BadgeCheck className="h-4 w-4 text-emerald-600" />
-                        <span>{product.profiles?.full_name || "Verified farmer"}</span>
-                      </div>
-
-                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                        <span>{product.average_rating ? product.average_rating.toFixed(1) : "New"}</span>
-                        <span>({product.ratings_count} ratings)</span>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-2 rounded-[1rem] bg-muted/50 p-2.5">
-                        <div>
-                          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Price</p>
-                          <p className="mt-1 font-display text-base font-bold text-primary">KES {product.price_per_unit}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Unit</p>
-                          <p className="mt-1 text-sm font-semibold text-foreground">{product.unit}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Stock</p>
-                          <p className="mt-1 text-sm font-semibold text-foreground">{product.stock}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </button>
-
-                  <div className="grid grid-cols-[auto_1fr_1fr] gap-2 px-3 pb-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="rounded-xl px-3"
-                      onClick={() => void toggleLike(product.id)}
-                    >
-                      <Heart className={`h-4 w-4 ${product.liked_by_me ? "fill-rose-500 text-rose-500" : ""}`} />
-                    </Button>
-                    <Button variant="outline" className="rounded-xl" onClick={() => void handleAddToCart(product, 1)}>
-                      <ShoppingCart className="mr-2 h-4 w-4" /> Add
-                    </Button>
-                    <Button onClick={() => setSelectedProduct(product)} className="rounded-xl bg-primary/10 text-primary transition-colors hover:bg-primary hover:text-primary-foreground">
-                      Buy Now
-                    </Button>
-                  </div>
-                </motion.article>
-              );
-            })}
+            {filtered.map((product, index) => (
+              <ProductCard
+                key={product.id}
+                product={product}
+                index={index}
+                distanceLabel={getProductDistanceLabel(product)}
+                onOpen={setSelectedProduct}
+                onToggleLike={(id) => void toggleLike(id)}
+                onQuickAdd={(p, qty) => void handleAddToCart(p, qty)}
+              />
+            ))}
 
             {!filtered.length && (
               <div className="col-span-full rounded-[2rem] border border-dashed border-border bg-white/75 py-16 text-center shadow-sm dark:bg-card/80">

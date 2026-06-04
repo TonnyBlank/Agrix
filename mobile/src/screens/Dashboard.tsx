@@ -1,20 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
-import {
-  type AppRole,
-  type MobileRoute,
-  type MobileRouteKey,
-  isAdminRole,
-} from '../config/navigation';
+import { Button, Card, Chip, EmptyState, SectionHeader, Stack } from '../components/ui';
+import { type AppRole, type MobileRoute, type MobileRouteKey, isAdminRole } from '../config/navigation';
 import { apiFetch } from '../lib/api';
+import { extractRows, firstText, formatMoney, getNumber, type RecordRow } from '../lib/records';
+import { colors, radii, spacing, typography } from '../theme';
 
-type RecordRow = Record<string, unknown>;
-
-type Profile = {
-  full_name?: string | null;
-  county?: string | null;
-};
+type Profile = { full_name?: string | null; county?: string | null };
 
 type DashboardProps = {
   profile: Profile | null;
@@ -31,7 +24,7 @@ const routeDescriptions: Partial<Record<MobileRouteKey, string>> = {
   cart: 'Review selected items before checkout.',
   messages: 'Buyer, company, admin, and support conversations.',
   orders: 'Track buying and selling order workflows.',
-  notifications: 'Important account, order, loan, and admin updates.',
+  notifications: 'Account, order, loan, and admin updates.',
   activity: 'Recent movement across your AgriLink account.',
   discover: 'Companies, procurement requests, and farmer opportunities.',
   scanner: 'Upload a crop photo and get field diagnosis guidance.',
@@ -47,7 +40,7 @@ const routeDescriptions: Partial<Record<MobileRouteKey, string>> = {
   companyOrders: 'Company-side marketplace order management.',
   companyProcurement: 'Procurement requests and farmer responses.',
   companySettings: 'Company profile and verification settings.',
-  adminOverview: 'Platform summary for users, orders, loans, and reviews.',
+  adminOverview: 'Platform summary for users, orders, loans, reviews.',
   adminLoans: 'Loan offers available to farmers and companies.',
   adminLoanDecisions: 'Review and decide submitted loan applications.',
   adminTransactions: 'Order payments, delivery signoff, and payouts.',
@@ -68,60 +61,61 @@ export function DashboardScreen({ profile, role, routes, setActiveKey }: Dashboa
   }, {});
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.heroPanel}>
-        <Text style={styles.panelLabel}>{formatRole(role).toUpperCase()}</Text>
-        <Text style={styles.bigName}>{profile?.full_name || 'AgriLink User'}</Text>
-        <Text style={styles.panelNote}>
-          {profile?.county || 'Set your county'} - Your workspace is synced across AgriLink X.
+    <Stack gap={spacing.lg}>
+      {/* Hero / greeting */}
+      <View style={styles.hero}>
+        <Text style={styles.heroEyebrow}>{formatRole(role).toUpperCase()}</Text>
+        <Text style={styles.heroName}>{profile?.full_name || 'AgriLink User'}</Text>
+        <Text style={styles.heroNote}>
+          {profile?.county || 'Set your county'} · Synced across AgriLink X.
         </Text>
       </View>
 
       <DashboardSummary role={role} />
 
-      <View style={styles.quickActions}>
-        {getQuickActions(role).map((action, index) => (
-          <Pressable
-            key={action.key}
-            onPress={() => setActiveKey(action.key)}
-            style={index === 0 ? styles.quickButton : styles.quickButtonLight}
-          >
-            <Text style={index === 0 ? styles.quickButtonText : styles.quickButtonLightText}>{action.label}</Text>
-          </Pressable>
-        ))}
+      <View>
+        <SectionHeader eyebrow="Shortcuts" title="Quick actions" />
+        <View style={styles.actionRow}>
+          {getQuickActions(role).map((action, index) => (
+            <View key={action.key} style={styles.actionSlot}>
+              <Button
+                fullWidth
+                label={action.label}
+                variant={index === 0 ? 'primary' : 'secondary'}
+                onPress={() => setActiveKey(action.key)}
+              />
+            </View>
+          ))}
+        </View>
       </View>
 
       {Object.entries(grouped).map(([section, items]) => (
         <View key={section}>
-          <Text style={styles.sectionTitle}>{section}</Text>
+          <SectionHeader eyebrow={section} title={section} />
           <View style={styles.grid}>
             {items.map((route) => (
-              <Pressable key={route.key} onPress={() => setActiveKey(route.key)} style={styles.gridButton}>
+              <Card key={route.key} style={styles.gridCard}>
                 <View style={styles.gridIcon}>
                   <Text style={styles.gridInitial}>{route.title.slice(0, 1)}</Text>
                 </View>
-                <Text style={styles.gridText}>{route.title}</Text>
-                <Text style={styles.gridDescription}>
+                <Text style={styles.gridTitle} numberOfLines={1}>{route.title}</Text>
+                <Text style={styles.gridDescription} numberOfLines={2}>
                   {routeDescriptions[route.key] || 'Open this AgriLink X tool.'}
                 </Text>
-              </Pressable>
+                <Button size="sm" variant="ghost" label="Open" onPress={() => setActiveKey(route.key)} />
+              </Card>
             ))}
           </View>
         </View>
       ))}
-    </View>
+    </Stack>
   );
 }
 
 function DashboardSummary({ role }: { role: AppRole | null }) {
   const [summary, setSummary] = useState({
-    revenue: 0,
-    products: 0,
-    pendingOrders: 0,
-    unreadMessages: 0,
-    notifications: 0,
-    loansValue: 0,
-    users: 0,
+    revenue: 0, products: 0, pendingOrders: 0, unreadMessages: 0,
+    notifications: 0, loansValue: 0, users: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -136,9 +130,9 @@ function DashboardSummary({ role }: { role: AppRole | null }) {
           apiFetch<unknown>('/admin/orders').catch(() => []),
           apiFetch<unknown>('/notifications?limit=80').catch(() => []),
         ]);
-        const orderRows = extractRows(orders) as RecordRow[];
+        const orderRows = extractRows(orders);
         setSummary({
-          revenue: orderRows.reduce((sum, order) => sum + getNumber(order, ['total_price', 'total_amount']), 0),
+          revenue: orderRows.reduce((s, o) => s + getNumber(o, ['total_price', 'total_amount']), 0),
           products: getNumber(overview, ['productsCount']),
           pendingOrders: getNumber(overview, ['ordersCount']),
           unreadMessages: getNumber(overview, ['pendingVerificationsCount']),
@@ -157,17 +151,16 @@ function DashboardSummary({ role }: { role: AppRole | null }) {
         apiFetch<unknown>('/notifications?limit=80').catch(() => []),
       ]);
 
-      const orderRows = [...extractRows(sellingOrders), ...extractRows(buyingOrders)];
-      const sellingRows = extractRows(sellingOrders) as RecordRow[];
-      const pendingOrders = orderRows.filter((row) => {
-        if (!row || typeof row !== 'object') return false;
-        const status = String((row as Record<string, unknown>).status || '').toLowerCase();
+      const sellingRows = extractRows(sellingOrders);
+      const allOrders = [...sellingRows, ...extractRows(buyingOrders)];
+      const pendingOrders = allOrders.filter((row) => {
+        const status = String(row.status || '').toLowerCase();
         return !['delivered', 'completed', 'cancelled', 'failed'].includes(status);
       }).length;
-      const revenue = sellingRows.reduce((sum, order) => {
-        const status = firstText(order, ['payment_status']);
-        if (status && !['paid', 'released', 'initiated'].includes(status)) return sum;
-        return sum + getNumber(order, ['seller_payout_amount', 'total_price', 'total_amount', 'amount']);
+      const revenue = sellingRows.reduce((s, o) => {
+        const status = firstText(o, ['payment_status']);
+        if (status && !['paid', 'released', 'initiated'].includes(status)) return s;
+        return s + getNumber(o, ['seller_payout_amount', 'total_price', 'total_amount', 'amount']);
       }, 0);
 
       setSummary({
@@ -179,142 +172,82 @@ function DashboardSummary({ role }: { role: AppRole | null }) {
         loansValue: 0,
         users: 0,
       });
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not load dashboard summary.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load summary.');
     } finally {
       setLoading(false);
     }
   }, [role]);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const items = [
-    {
-      label: isAdminRole(role) ? 'Platform Revenue' : 'Revenue This Week',
-      value: summary.revenue,
-      display: formatMoney(summary.revenue),
-      helper: role === 'company' ? 'Company order value' : isAdminRole(role) ? 'Tracked order value' : 'From recent selling orders',
-    },
-    {
-      label: role === 'company' ? 'Products' : 'Active Listings',
-      value: summary.products,
-      display: String(summary.products),
-      helper: role === 'company' ? 'Company catalogue' : 'Visible to buyers',
-    },
+    { label: isAdminRole(role) ? 'Platform Revenue' : 'Revenue', value: summary.revenue, display: formatMoney(summary.revenue), helper: isAdminRole(role) ? 'Tracked order value' : 'Recent selling orders' },
+    { label: role === 'company' ? 'Products' : 'Listings', value: summary.products, display: String(summary.products), helper: role === 'company' ? 'Catalogue' : 'Visible to buyers' },
     { label: isAdminRole(role) ? 'Orders' : 'Pending Orders', value: summary.pendingOrders, display: String(summary.pendingOrders), helper: 'Need follow-up' },
     { label: isAdminRole(role) ? 'Users' : 'Messages', value: isAdminRole(role) ? summary.users : summary.unreadMessages, display: String(isAdminRole(role) ? summary.users : summary.unreadMessages), helper: isAdminRole(role) ? 'Platform accounts' : 'Conversations' },
     { label: isAdminRole(role) ? 'Loan Value' : 'Notifications', value: isAdminRole(role) ? summary.loansValue : summary.notifications, display: isAdminRole(role) ? formatMoney(summary.loansValue) : String(summary.notifications), helper: isAdminRole(role) ? 'Approved financing' : 'Latest updates' },
   ];
 
   return (
-    <View style={styles.summaryWrap}>
-      <View style={styles.summaryHeader}>
-        <Text style={styles.sectionTitle}>Summary</Text>
-        <Pressable onPress={load} style={styles.refreshButton}>
-          <Text style={styles.refreshButtonText}>{loading ? 'Loading' : 'Refresh'}</Text>
-        </Pressable>
-      </View>
-      {error ? <Text style={styles.inlineError}>{error}</Text> : null}
+    <View>
+      <SectionHeader
+        eyebrow="Snapshot"
+        title="Summary"
+        right={<Button size="sm" variant="secondary" label={loading ? 'Loading' : 'Refresh'} onPress={load} loading={loading} />}
+      />
+      {error ? <Text style={styles.error}>{error}</Text> : null}
       <View style={styles.summaryGrid}>
         {items.map((item) => (
-          <View key={item.label} style={styles.summaryCard}>
-            <Text style={styles.summaryValue}>{loading ? '--' : item.display}</Text>
+          <Card key={item.label} style={styles.summaryCard}>
+            <Text style={styles.summaryValue}>{loading ? '—' : item.display}</Text>
             <Text style={styles.summaryLabel}>{item.label}</Text>
             <Text style={styles.summaryHelper}>{item.helper}</Text>
-          </View>
+          </Card>
         ))}
       </View>
-      <MiniBarChart items={items.map((item) => ({ label: item.label, value: item.value }))} loading={loading} />
+      <MiniBarChart items={items.map((i) => ({ label: i.label, value: i.value }))} loading={loading} />
     </View>
   );
 }
 
+function MiniBarChart({ items, loading }: { items: Array<{ label: string; value: number }>; loading: boolean }) {
+  const max = Math.max(...items.map((i) => i.value), 1);
+  return (
+    <Card style={{ marginTop: spacing.md, gap: spacing.sm }}>
+      <Text style={styles.chartTitle}>Activity</Text>
+      {items.map((item) => (
+        <View key={`chart-${item.label}`} style={styles.chartRow}>
+          <Text style={styles.chartLabel} numberOfLines={1}>{item.label}</Text>
+          <View style={styles.chartTrack}>
+            <View style={[styles.chartFill, { width: loading ? '18%' : `${Math.max(8, (item.value / max) * 100)}%` }]} />
+          </View>
+          <Text style={styles.chartValue}>{loading ? '—' : item.value}</Text>
+        </View>
+      ))}
+    </Card>
+  );
+}
+
 function getQuickActions(role: AppRole | null): Array<{ key: MobileRouteKey; label: string }> {
-  if (isAdminRole(role)) {
-    return [
-      { key: 'adminOverview', label: 'Platform Summary' },
-      { key: 'adminLoanDecisions', label: 'Loan Reviews' },
-      { key: 'adminCompanies', label: 'Company Reviews' },
-      { key: 'adminVerifications', label: 'ID Checks' },
-    ];
-  }
-
-  if (role === 'company') {
-    return [
-      { key: 'companyProcurement', label: 'Procurement' },
-      { key: 'companyProducts', label: 'Products' },
-      { key: 'companyOrders', label: 'Orders' },
-      { key: 'messages', label: 'Messages' },
-    ];
-  }
-
+  if (isAdminRole(role)) return [
+    { key: 'adminOverview', label: 'Platform Summary' },
+    { key: 'adminLoanDecisions', label: 'Loan Reviews' },
+    { key: 'adminCompanies', label: 'Company Reviews' },
+    { key: 'adminVerifications', label: 'ID Checks' },
+  ];
+  if (role === 'company') return [
+    { key: 'companyProcurement', label: 'Procurement' },
+    { key: 'companyProducts', label: 'Products' },
+    { key: 'companyOrders', label: 'Orders' },
+    { key: 'messages', label: 'Messages' },
+  ];
   return [
     { key: 'products', label: 'Add Listing' },
     { key: 'microLoans', label: 'Loans' },
     { key: 'scanner', label: 'AI Scanner' },
     { key: 'orders', label: 'Orders' },
   ];
-}
-
-function MiniBarChart({ items, loading }: { items: Array<{ label: string; value: number }>; loading: boolean }) {
-  const maxValue = Math.max(...items.map((item) => item.value), 1);
-  return (
-    <View style={styles.chartPanel}>
-      <Text style={styles.chartTitle}>Activity Graph</Text>
-      {items.map((item) => (
-        <View key={`chart-${item.label}`} style={styles.chartRow}>
-          <Text style={styles.chartLabel} numberOfLines={1}>{item.label}</Text>
-          <View style={styles.chartTrack}>
-            <View style={[styles.chartFill, { width: loading ? '18%' : `${Math.max(8, (item.value / maxValue) * 100)}%` }]} />
-          </View>
-          <Text style={styles.chartValue}>{loading ? '--' : item.value}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function extractRows(data: unknown): unknown[] {
-  const value = unwrapData(data);
-  if (Array.isArray(value)) return value;
-  if (value && typeof value === 'object') return [value];
-  return [];
-}
-
-function unwrapData(data: unknown): unknown {
-  if (!data || typeof data !== 'object' || Array.isArray(data)) return data;
-  const record = data as Record<string, unknown>;
-  const keys = ['products', 'orders', 'requests', 'responses', 'partners', 'companies', 'notifications', 'conversations', 'applications', 'profile', 'company'];
-  for (const key of keys) {
-    if (key in record) return record[key];
-  }
-  return data;
-}
-
-function firstText(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === 'string' && value.trim()) return value;
-    if (typeof value === 'number') return String(value);
-  }
-  return '';
-}
-
-function getNumber(record: RecordRow, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'string' && value.trim() && Number.isFinite(Number(value))) {
-      return Number(value);
-    }
-  }
-  return 0;
-}
-
-function formatMoney(value: number) {
-  return `KES ${Math.round(value).toLocaleString('en-KE')}`;
 }
 
 function formatRole(role: AppRole | null) {
@@ -326,207 +259,41 @@ function formatRole(role: AppRole | null) {
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    gap: 14,
+  hero: {
+    backgroundColor: colors.primaryDeep,
+    borderRadius: radii.lg,
+    padding: spacing.xl,
+    gap: spacing.xs,
   },
-  heroPanel: {
-    backgroundColor: '#203d2b',
-    borderRadius: 8,
-    padding: 18,
-  },
-  panelLabel: {
-    color: '#cfe4d0',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  bigName: {
-    color: '#ffffff',
-    fontSize: 28,
-    fontWeight: '900',
-    marginTop: 8,
-  },
-  panelNote: {
-    color: '#e8f1e7',
-    fontSize: 14,
-    marginTop: 7,
-  },
-  sectionTitle: {
-    color: '#162016',
-    fontSize: 17,
-    fontWeight: '900',
-    marginBottom: 10,
-    marginTop: 4,
-  },
-  summaryWrap: {
-    gap: 10,
-  },
-  summaryHeader: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  refreshButton: {
-    backgroundColor: '#e8f3df',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  refreshButtonText: {
-    color: '#2f6b3f',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  inlineError: {
-    color: '#a13b2f',
-    fontSize: 13,
-    lineHeight: 18,
-  },
-  summaryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  summaryCard: {
-    backgroundColor: '#ffffff',
-    borderColor: '#dfe5d8',
-    borderRadius: 8,
-    borderWidth: 1,
-    minHeight: 106,
-    padding: 14,
-    width: '48%',
-  },
-  summaryValue: {
-    color: '#203d2b',
-    fontSize: 28,
-    fontWeight: '900',
-  },
-  summaryLabel: {
-    color: '#162016',
-    fontSize: 13,
-    fontWeight: '900',
-    marginTop: 5,
-  },
-  summaryHelper: {
-    color: '#687365',
-    fontSize: 12,
-    lineHeight: 16,
-    marginTop: 3,
-  },
-  chartPanel: {
-    backgroundColor: '#ffffff',
-    borderColor: '#dfe5d8',
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 10,
-    padding: 14,
-  },
-  chartTitle: {
-    color: '#162016',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  chartRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  chartLabel: {
-    color: '#687365',
-    fontSize: 11,
-    fontWeight: '800',
-    width: 88,
-  },
-  chartTrack: {
-    backgroundColor: '#eef2ea',
-    borderRadius: 8,
-    flex: 1,
-    height: 12,
-    overflow: 'hidden',
-  },
-  chartFill: {
-    backgroundColor: '#2f6b3f',
-    borderRadius: 8,
-    height: '100%',
-  },
-  chartValue: {
-    color: '#203d2b',
-    fontSize: 12,
-    fontWeight: '900',
-    minWidth: 24,
-    textAlign: 'right',
-  },
-  quickActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  quickButton: {
-    alignItems: 'center',
-    backgroundColor: '#2f6b3f',
-    borderRadius: 8,
-    height: 52,
-    justifyContent: 'center',
-    minWidth: '48%',
-    paddingHorizontal: 10,
-  },
-  quickButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  quickButtonLight: {
-    alignItems: 'center',
-    backgroundColor: '#e8f3df',
-    borderRadius: 8,
-    height: 52,
-    justifyContent: 'center',
-    minWidth: '48%',
-    paddingHorizontal: 10,
-  },
-  quickButtonLightText: {
-    color: '#2f6b3f',
-    fontSize: 14,
-    fontWeight: '900',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  gridButton: {
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderColor: '#dfe5d8',
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-    minHeight: 142,
-    padding: 12,
-    width: '48%',
-  },
+  heroEyebrow: { color: colors.goldSoft, fontSize: 12, fontWeight: '900', letterSpacing: 1 },
+  heroName: { color: colors.textInverse, fontSize: 28, fontWeight: '900', marginTop: 4 },
+  heroNote: { color: colors.primarySoft, fontSize: 14, marginTop: 4 },
+
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  actionSlot: { width: '48%' },
+
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  gridCard: { width: '48%', padding: spacing.md, gap: spacing.xs },
   gridIcon: {
-    alignItems: 'center',
-    backgroundColor: '#e8f3df',
-    borderRadius: 8,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
+    width: 36, height: 36, borderRadius: radii.md,
+    backgroundColor: colors.primarySoft, alignItems: 'center', justifyContent: 'center',
   },
-  gridInitial: {
-    color: '#2f6b3f',
-    fontSize: 18,
-    fontWeight: '900',
-  },
-  gridText: {
-    color: '#162016',
-    fontSize: 13,
-    fontWeight: '900',
-    textAlign: 'center',
-  },
-  gridDescription: {
-    color: '#687365',
-    fontSize: 11,
-    lineHeight: 15,
-    textAlign: 'center',
-  },
+  gridInitial: { color: colors.primaryDark, fontWeight: '900', fontSize: 16 },
+  gridTitle: { ...typography.subheading, color: colors.text },
+  gridDescription: { ...typography.caption, color: colors.textSecondary, fontWeight: '500', lineHeight: 16 },
+
+  summaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+  summaryCard: { width: '48%', padding: spacing.md, gap: 2 },
+  summaryValue: { color: colors.primaryDeep, fontSize: 24, fontWeight: '900' },
+  summaryLabel: { color: colors.text, fontSize: 13, fontWeight: '800', marginTop: 4 },
+  summaryHelper: { color: colors.textMuted, fontSize: 11, lineHeight: 14, marginTop: 2 },
+
+  chartTitle: { color: colors.text, fontSize: 13, fontWeight: '900' },
+  chartRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  chartLabel: { color: colors.textMuted, fontSize: 11, fontWeight: '700', width: 92 },
+  chartTrack: { flex: 1, height: 10, backgroundColor: colors.surfaceMuted, borderRadius: radii.pill, overflow: 'hidden' },
+  chartFill: { height: '100%', backgroundColor: colors.primary, borderRadius: radii.pill },
+  chartValue: { color: colors.text, fontSize: 12, fontWeight: '900', minWidth: 28, textAlign: 'right' },
+
+  error: { color: colors.danger, fontSize: 13, marginBottom: spacing.sm },
 });
