@@ -20,7 +20,7 @@ function resolveApiBaseUrl() {
     if (hostname === "localhost" || hostname === "127.0.0.1") {
       return "http://localhost:3001/api";
     }
-    return `${window.location.origin}/api`;
+    return "https://agrix-bavp.onrender.com/api";
   }
 
   return "http://localhost:3001/api";
