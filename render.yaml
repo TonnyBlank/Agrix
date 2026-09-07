@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: agrix-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn config.asgi:application --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: DJANGO_DEBUG
+        value: "false"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_ALLOWED_HOSTS
+        sync: false
+      - key: CLIENT_ORIGIN
+        value: https://agrilink-kenya.vercel.app
+      - key: SUPABASE_URL
+        value: https://ubgntfyeagvwigvrqhgj.supabase.co
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: MPESA_ENV
+        value: sandbox
+      - key: MPESA_MOCK_MODE
+        value: "true"
+      - key: MPESA_CALLBACK_URL
+        sync: false
