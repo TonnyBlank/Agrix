@@ -199,7 +199,7 @@ export default function CompanyOnboarding() {
                 <img 
                   src="https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80" 
                   alt="Agricultural produce and logistics" 
-                  className="w-full h-full object-cover aspect-[4/3] hover:scale-105 transition-transform duration-[1.5s] ease-out bg-muted"
+                  className="w-full h-full object-cover aspect-[4/3] hover:scale-105 transition-transform duration-700 ease-out bg-muted"
                 />
               </div>
             </div>

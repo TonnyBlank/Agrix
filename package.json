@@ -3,11 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
+    "sync:env": "node scripts/sync-env.cjs",
     "dev": "cd frontend && ./node_modules/.bin/vite",
     "build": "cd frontend && ./node_modules/.bin/vite build",
     "build:dev": "cd frontend && ./node_modules/.bin/vite build --mode development",
     "preview": "cd frontend && ./node_modules/.bin/vite preview",
     "lint": "cd frontend && ./node_modules/.bin/eslint .",
+    "typecheck": "cd frontend && ./node_modules/.bin/tsc --noEmit -p tsconfig.app.json",
     "test": "cd frontend && ./node_modules/.bin/vitest run"
   }
 }

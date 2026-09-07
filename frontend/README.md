@@ -1,6 +1,8 @@
 # AgriLink X Frontend
 
-The frontend is a React + Vite application for farmers, companies, buyers, and admins. It powers the public landing experience and the authenticated dashboard flows.
+The frontend is the React + Vite application for AgriLink X. It powers the public landing site and the authenticated dashboards for farmers, companies, buyers, and admins.
+
+AgriLink X is built for mixed agriculture: crops, poultry, eggs, livestock, dairy, fish, honey, farm inputs, services, trade, logistics, finance, and AI-assisted intelligence.
 
 ## Stack
 
@@ -14,42 +16,102 @@ The frontend is a React + Vite application for farmers, companies, buyers, and a
 - TanStack Query
 - React Leaflet
 - Supabase JS
+- Capacitor Android dependencies are present for future native packaging
 
 ## Main Frontend Areas
 
-- landing pages and authentication
-- farmer dashboard flows:
-  - my farm
-  - marketplace
-  - cart and checkout handoff
-  - crop scanner
-  - products
-  - orders
-  - messages
-  - micro-loans
-  - paid-plan upgrade payment flow
-- company dashboard flows:
-  - company hub
-  - products
-  - partners
-  - procurement
-  - orders
-  - settings
-- admin flows:
-  - users
-  - company verification
-  - loans and decisions
+### Public Site
 
-## Notable UX Features
+- landing hero
+- features
+- services
+- agricultural intelligence
+- pricing
+- auth entry points
 
-- premium "Forest Glass" dashboard styling
-- role-aware dashboard routing
-- real farm GPS capture on `My Farm`
-- map display with saved farm coordinates
-- company command-center dashboard layout
-- responsive layouts for desktop and mobile
+The public messaging positions AgriLink X as a full agriculture operating system, not only a crop marketplace.
+
+### Farmer Dashboard
+
+- dashboard home
+- Services Hub
+- My Farm profile and GPS mapping
+- mixed-enterprise profile data
+- products/listings
+- marketplace
+- cart
+- orders
+- messages
+- crop calendar
+- AI scanner
+- micro-loans
+- deal matches
+- analytics and community surfaces
+
+### Company Dashboard
+
+- company hub
+- company profile and settings
+- product catalog
+- farmer partners
+- procurement requests
+- procurement response review
+- company orders
+- Services Hub
+
+### Admin Dashboard
+
+- users and roles
+- ID verification
+- company verification
+- loans and decisions
+- transactions
+- orders and payout review
+- feature flags
+- audit logs
+
+## Services Hub
+
+The Services Hub is the primary mixed-agriculture command center.
+
+It is arranged as:
+
+1. executive summary
+2. key metrics
+3. AI priority signals
+4. operating modules
+5. commodity coverage
+6. operations detail: GMCIS, market supply, and movement queue
+
+The hub uses live local state from:
+
+- authenticated profile
+- products/listings
+- orders
+- marketplace supply
+- weather lookup
+- GPS/profile readiness
+- storage and transport signals
+
+It supports crops, poultry, eggs, livestock, dairy, fish, honey, inputs, and services.
+
+## Environment Variables
+
+Create `frontend/.env` from `frontend/.env.example`.
+
+Minimum:
+
+```text
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+VITE_API_URL=http://127.0.0.1:3001/api
+```
+
+The anon key is safe for the browser when Supabase RLS is configured correctly. Never put the Supabase service role key in the frontend.
 
 ## Setup
+
+From the repository root:
 
 ```bash
 cd frontend
@@ -57,79 +119,60 @@ npm install
 cp .env.example .env
 ```
 
-For a fresh Supabase project, run the root SQL bootstrap first:
-
-- `../setup_database.sql`
-
-## Environment Variables
-
-At minimum:
+For a fresh Supabase project, run the root setup SQL first:
 
 ```text
-VITE_SUPABASE_URL=your-supabase-url
-VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
+../setup_database.sql
 ```
-
-Optional:
-
-```text
-VITE_API_URL=http://127.0.0.1:3001/api
-```
-
-If `VITE_API_URL` is not set, the app auto-resolves the backend during local development.
 
 ## Run Locally
 
 ```bash
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 8080
 ```
 
-Default dev URL:
+Local URL:
 
 ```text
 http://localhost:8080
 ```
+
+If port `8080` is busy, choose another Vite port.
 
 ## Scripts
 
 ```bash
 npm run dev
 npm run build
+npm run build:dev
 npm run preview
+npm run lint
 npm run test
 npm run test:watch
-npm run lint
 ```
 
-## Project Structure
+## Important Files
 
-- `src/pages/`: route-level pages
-- `src/components/`: reusable UI and dashboard blocks
-- `src/hooks/`: feature and auth hooks
-- `src/lib/`: API helpers, utilities, and configuration
-- `src/integrations/supabase/`: generated Supabase types and client
-- `public/`: static assets
-
-## Development Notes
-
-- The API helper targets the Django backend on port `3001` during local dev
-- Company pages expect the company schema and procurement schema to exist in Supabase
-- Procurement UI expects response statuses to stay in sync with backend/SQL: `submitted`, `accepted`, `rejected`, `withdrawn`
-- The `My Farm` page stores farm GPS coordinates in the user profile when available
-- The map view prefers saved GPS coordinates over plain county geocoding
+- `src/App.tsx` - route wiring and protected dashboards
+- `src/pages/dashboard/ServiceHub.tsx` - mixed-agriculture Services Hub
+- `src/pages/dashboard/MyFarm.tsx` - farm profile, enterprise data, and GPS mapping
+- `src/pages/dashboard/Marketplace.tsx` - marketplace browsing and order entry
+- `src/pages/dashboard/Cart.tsx` - persisted cart and checkout handoff
+- `src/pages/dashboard/MicroLoans.tsx` - financing workflow
+- `src/pages/dashboard/CompanyDashboard.tsx` - company workspace
+- `src/components/dashboard/AppSidebar.tsx` - role-aware navigation
+- `src/hooks/` - auth, products, orders, weather, messages, and feature hooks
+- `src/lib/api.ts` - backend API client
+- `src/integrations/supabase/` - Supabase client and generated database types
 
 ## Verification
 
-Build the frontend:
-
 ```bash
+npm run lint
+npm run typecheck
 npm run build
 ```
 
-Run tests:
+Known non-blocking warnings may include React Fast Refresh warnings, hook dependency warnings, and a Vite chunk-size warning. The build and typecheck should still pass.
 
-```bash
-npm run test
-```
-
-For overall project documentation, see the [root README](../README.md).
+For the complete product, setup, market comparison, and backend notes, see the [root README](../README.md).

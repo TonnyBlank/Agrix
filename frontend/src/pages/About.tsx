@@ -46,7 +46,7 @@ export default function About() {
                 <img 
                   src="https://images.unsplash.com/photo-1595841696677-6489ff3f8cd1?auto=format&fit=crop&q=80" 
                   alt="African farmer in field" 
-                  className="w-full h-full object-cover aspect-[4/3] hover:scale-105 transition-transform duration-[1.5s] ease-out"
+                  className="w-full h-full object-cover aspect-[4/3] hover:scale-105 transition-transform duration-700 ease-out"
                 />
               </div>
             </div>

@@ -116,6 +116,11 @@ export function useCart() {
         method: "POST",
         body: payload as unknown as BodyInit,
       });
+      setItems((current) => {
+        const next = [created, ...current.filter((item) => item.id !== created.id)];
+        cartCache.set(user.id, { items: next, fetchedAt: Date.now() });
+        return next;
+      });
       notifyCartChanged();
       return created;
     } catch (error) {
@@ -130,6 +135,13 @@ export function useCart() {
         method: "PATCH",
         body: payload as unknown as BodyInit,
       });
+      if (user) {
+        setItems((current) => {
+          const next = current.map((item) => (item.id === itemId ? updated : item));
+          cartCache.set(user.id, { items: next, fetchedAt: Date.now() });
+          return next;
+        });
+      }
       notifyCartChanged();
       return updated;
     } catch (error) {
@@ -143,6 +155,13 @@ export function useCart() {
       await apiFetch<{ success: boolean }>(`/cart/${itemId}`, {
         method: "DELETE",
       });
+      if (user) {
+        setItems((current) => {
+          const next = current.filter((item) => item.id !== itemId);
+          cartCache.set(user.id, { items: next, fetchedAt: Date.now() });
+          return next;
+        });
+      }
       notifyCartChanged();
       return true;
     } catch (error) {

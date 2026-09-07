@@ -15,6 +15,7 @@ import ResetPassword from "./pages/ResetPassword";
 import CompanyOnboarding from "./pages/CompanyOnboarding";
 import DashboardRedirect from "./pages/DashboardRedirect";
 import DashboardHome from "./pages/dashboard/DashboardHome";
+import ServiceHub from "./pages/dashboard/ServiceHub";
 import FarmerFreeDashboard from "./pages/dashboard/FarmerFreeDashboard";
 import FarmerProDashboard from "./pages/dashboard/FarmerProDashboard";
 import PerformanceAnalytics from "./pages/dashboard/PerformanceAnalytics";
@@ -28,6 +29,7 @@ import CropCalendar from "./pages/dashboard/CropCalendar";
 import Community from "./pages/dashboard/Community";
 import Messages from "./pages/dashboard/Messages";
 import MicroLoans from "./pages/dashboard/MicroLoans";
+import RiskCredit from "./pages/dashboard/RiskCredit";
 import UpgradePlan from "./pages/dashboard/UpgradePlan";
 import ProfileRoute from "./pages/dashboard/ProfileRoute";
 import FarmerProfile from "./pages/dashboard/FarmerProfile";
@@ -42,8 +44,10 @@ import NotificationsCenter from "./pages/dashboard/NotificationsCenter";
 import ActivityTimeline from "./pages/dashboard/ActivityTimeline";
 import DiscoveryHub from "./pages/dashboard/DiscoveryHub";
 import DealMatches from "./pages/dashboard/DealMatches";
+import LogisticsDispatch from "./pages/dashboard/LogisticsDispatch";
 import AdminLoans from "./pages/dashboard/admin/AdminLoans";
 import AdminLoanDecisions from "./pages/dashboard/admin/AdminLoanDecisions";
+import AdminRiskCredit from "./pages/dashboard/admin/AdminRiskCredit";
 import AdminTransactions from "./pages/dashboard/admin/AdminTransactions";
 import AdminUsers from "./pages/dashboard/admin/AdminUsers";
 import AdminCompanyVerification from "./pages/dashboard/admin/AdminCompanyVerification";
@@ -55,6 +59,7 @@ import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 const nonAdminRoles = ["farmer_free", "farmer_pro", "company"] as const;
+const accountRoles = ["farmer_free", "farmer_pro", "company", "transporter"] as const;
 const farmerRoles = ["farmer_free", "farmer_pro"] as const;
 
 function LegacyEnterpriseRedirect() {
@@ -89,16 +94,19 @@ const App = () => (
             <Route path="/dashboard" element={<ProtectedRoute><DashboardRedirect /></ProtectedRoute>} />
             <Route path="/dashboard/admin" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboard /></ProtectedRoute>} />
             <Route path="/dashboard/company" element={<ProtectedRoute allowedRoles={["company"]}><CompanyDashboard /></ProtectedRoute>} />
+            <Route path="/dashboard/services" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><ServiceHub /></ProtectedRoute>} />
             <Route path="/dashboard/company/products" element={<ProtectedRoute allowedRoles={["company"]}><CompanyProducts /></ProtectedRoute>} />
             <Route path="/dashboard/company/partners" element={<ProtectedRoute allowedRoles={["company"]}><CompanyPartners /></ProtectedRoute>} />
             <Route path="/dashboard/company/orders" element={<ProtectedRoute allowedRoles={["company"]}><CompanyOrders /></ProtectedRoute>} />
             <Route path="/dashboard/company/procurement" element={<ProtectedRoute allowedRoles={["company"]}><CompanyProcurement /></ProtectedRoute>} />
             <Route path="/dashboard/company/settings" element={<ProtectedRoute allowedRoles={["company"]}><CompanyProfileSettings /></ProtectedRoute>} />
+            <Route path="/dashboard/logistics" element={<ProtectedRoute allowedRoles={["admin", "transporter"]}><LogisticsDispatch /></ProtectedRoute>} />
             <Route path="/dashboard/notifications" element={<ProtectedRoute><NotificationsCenter /></ProtectedRoute>} />
             <Route path="/dashboard/activity" element={<ProtectedRoute><ActivityTimeline /></ProtectedRoute>} />
             <Route path="/dashboard/discover" element={<ProtectedRoute><DiscoveryHub /></ProtectedRoute>} />
             <Route path="/dashboard/admin/loans" element={<ProtectedRoute allowedRoles={["admin"]}><AdminLoans /></ProtectedRoute>} />
             <Route path="/dashboard/admin/loan-decisions" element={<ProtectedRoute allowedRoles={["admin"]}><AdminLoanDecisions /></ProtectedRoute>} />
+            <Route path="/dashboard/admin/risk-credit" element={<ProtectedRoute allowedRoles={["admin"]}><AdminRiskCredit /></ProtectedRoute>} />
             <Route path="/dashboard/admin/transactions" element={<ProtectedRoute allowedRoles={["admin"]}><AdminTransactions /></ProtectedRoute>} />
             <Route path="/dashboard/admin/disputes" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDisputes /></ProtectedRoute>} />
             <Route path="/dashboard/admin/users" element={<ProtectedRoute allowedRoles={["admin"]}><AdminUsers /></ProtectedRoute>} />
@@ -123,10 +131,10 @@ const App = () => (
             <Route path="/dashboard/community" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><Community /></ProtectedRoute>} />
             <Route path="/dashboard/messages" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><Messages /></ProtectedRoute>} />
             <Route path="/dashboard/micro-loans" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><MicroLoans /></ProtectedRoute>} />
+            <Route path="/dashboard/risk-credit" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><RiskCredit /></ProtectedRoute>} />
             <Route path="/dashboard/upgrade" element={<ProtectedRoute allowedRoles={[...farmerRoles]}><UpgradePlan /></ProtectedRoute>} />
-            <Route path="/dashboard/profile" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><ProfileRoute /></ProtectedRoute>} />
+            <Route path="/dashboard/profile" element={<ProtectedRoute allowedRoles={[...accountRoles]}><ProfileRoute /></ProtectedRoute>} />
             <Route path="/dashboard/farmers/:userId" element={<ProtectedRoute allowedRoles={[...nonAdminRoles]}><FarmerProfile /></ProtectedRoute>} />
-            <Route path="/micro-loans-isolated" element={<MicroLoans />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

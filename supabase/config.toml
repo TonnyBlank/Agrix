@@ -1,6 +1,4 @@
-[project]
-id = "rzdajvcuoyenekznmelj"
-name = "agrilink-x"
+project_id = "ubgntfyeagvwigvrqhgj"
 
 [api]
 port = 54321

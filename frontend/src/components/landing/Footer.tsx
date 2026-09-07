@@ -4,9 +4,9 @@ import { Link } from "react-router-dom";
 const links = {
   Platform: [
     { name: "Marketplace", href: "/login" },
+    { name: "Services", href: "/#services" },
     { name: "Farmer Signup", href: "/signup" },
     { name: "Company Signup", href: "/company-register" },
-    { name: "Community", href: "/login" },
   ],
   Company: [
     { name: "About", href: "/about" },

@@ -12,7 +12,10 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "agrilink-django-dev-secret-key")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if host.strip()] or ["*"]
 
-INSTALLED_APPS: list[str] = []
+INSTALLED_APPS: list[str] = [
+    "django.core.management",  # needed for management command discovery
+    "api",
+]
 MIDDLEWARE = [
     "config.middleware.SimpleCorsMiddleware",
 ]

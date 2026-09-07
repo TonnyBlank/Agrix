@@ -20,7 +20,7 @@ import { toast } from "sonner";
 const farmChecklist = [
   { key: "county", label: "Location added" },
   { key: "farm_size", label: "Farm size recorded" },
-  { key: "main_crops", label: "Main crops listed" },
+  { key: "main_crops", label: "Main enterprises listed" },
   { key: "farm_type", label: "Farm type selected" },
   { key: "irrigation_type", label: "Irrigation method added" },
   { key: "bio", label: "Farm story written" },
@@ -28,7 +28,32 @@ const farmChecklist = [
 ];
 
 const farmSizeOptions = ["Under 1 Acre", "1-3 Acres", "4-10 Acres", "11-25 Acres", "26-50 Acres", "50+ Acres"];
-const cropOptions = ["Maize", "Beans", "Tomatoes", "Potatoes", "Onions", "Cabbage", "Spinach", "Kale", "Avocado", "Bananas", "Coffee", "Tea", "Rice", "Wheat", "Dairy Feed"];
+const cropOptions = [
+  "Maize",
+  "Beans",
+  "Tomatoes",
+  "Potatoes",
+  "Onions",
+  "Cabbage",
+  "Spinach",
+  "Kale",
+  "Avocado",
+  "Bananas",
+  "Coffee",
+  "Tea",
+  "Rice",
+  "Wheat",
+  "Eggs",
+  "Broilers",
+  "Layers",
+  "Dairy",
+  "Milk",
+  "Goats",
+  "Cattle",
+  "Fish",
+  "Honey",
+  "Poultry Feed",
+];
 const farmTypeOptions = [
   { value: "subsistence", label: "Subsistence" },
   { value: "commercial", label: "Commercial" },
@@ -187,9 +212,9 @@ export default function MyFarm() {
       {
         key: "crops",
         icon: Wheat,
-        label: "Main Crops",
-        value: profile?.main_crops?.length ? `${profile.main_crops.length} crop types` : "Not set",
-        note: profile?.main_crops?.join(", ") || "Add crops to show what your farm specializes in.",
+        label: "Main Enterprises",
+        value: profile?.main_crops?.length ? `${profile.main_crops.length} enterprise types` : "Not set",
+        note: profile?.main_crops?.join(", ") || "Add crops, poultry, eggs, livestock, dairy, fish, or services.",
       },
       {
         key: "readiness",
@@ -618,11 +643,11 @@ export default function MyFarm() {
                   <div className="rounded-[1.25rem] border border-border/70 bg-muted/20 p-3.5">
                     <div className="flex items-center justify-between gap-3">
                       <div>
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Crop Focus</p>
-                        <p className="mt-1 text-sm text-muted-foreground">Show buyers exactly what your farm specializes in.</p>
+                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Enterprise Focus</p>
+                        <p className="mt-1 text-sm text-muted-foreground">Show buyers exactly what your farm produces, rears, or supplies.</p>
                       </div>
                       <span className="rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-foreground dark:bg-background/80">
-                        {profile?.main_crops?.length || 0} crop types
+                        {profile?.main_crops?.length || 0} enterprise types
                       </span>
                     </div>
 
@@ -639,7 +664,7 @@ export default function MyFarm() {
                       </div>
                     ) : (
                       <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                        Add your main crops so the page shows exactly what your farm specializes in.
+                        Add your crops, poultry, eggs, livestock, dairy, fish, inputs, or services so buyers understand your farm.
                       </p>
                     )}
                   </div>
@@ -647,7 +672,7 @@ export default function MyFarm() {
                   <div className="rounded-[1.25rem] border border-border/70 bg-muted/20 p-3.5">
                     <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Farm Story</p>
                     <p className="mt-2 text-sm leading-6 text-foreground">
-                      {profile?.bio || "Add a short farm story that explains your growing methods, consistency, and what makes your produce special."}
+                      {profile?.bio || "Add a short farm story that explains your methods, consistency, and what makes your agricultural work reliable."}
                     </p>
                   </div>
                 </div>
@@ -758,9 +783,9 @@ export default function MyFarm() {
             <div className="rounded-[1.55rem] border border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.95),rgba(255,255,255,0.98))] p-4 shadow-[0_18px_40px_-24px_rgba(16,185,129,0.2)] dark:border-emerald-500/30 dark:bg-[linear-gradient(135deg,rgba(16,185,129,0.14),rgba(15,23,42,0.94))] dark:shadow-[0_18px_40px_-24px_rgba(16,185,129,0.25)]">
               <h3 className="font-display text-[1.1rem] font-bold text-foreground">What Buyers Want</h3>
               <div className="mt-2.5 space-y-2 text-sm text-muted-foreground">
-                <p>Keep your county and farm size filled in so your profile feels trustworthy.</p>
-                <p>Add clear crop names, irrigation details, and farming experience so buyers know how you operate.</p>
-                <p>Storage, transport, and product videos all help buyers judge reliability faster.</p>
+                <p>Keep your county and operating capacity filled in so your profile feels trustworthy.</p>
+                <p>Add clear enterprise details, production methods, and farming experience so buyers know how you operate.</p>
+                <p>Storage, transport, handling notes, and product videos all help buyers judge reliability faster.</p>
               </div>
             </div>
           </motion.aside>
@@ -925,11 +950,11 @@ export default function MyFarm() {
 
             <div className="space-y-1 pt-2">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Production</p>
-              <p className="text-sm text-muted-foreground">What you grow and how you describe the farm.</p>
+              <p className="text-sm text-muted-foreground">What you grow, rear, produce, supply, and how you describe the farm.</p>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="main_crops">Main Crops</Label>
+              <Label htmlFor="main_crops">Main Crops / Enterprises</Label>
               <div className="grid grid-cols-1 gap-3 rounded-2xl border border-border bg-muted/20 p-4 sm:grid-cols-2">
                 {cropOptions.map((crop) => (
                   <label
@@ -946,10 +971,12 @@ export default function MyFarm() {
                 id="main_crops"
                 value={formData.custom_crops}
                 onChange={(e) => setFormData({ ...formData, custom_crops: e.target.value })}
-                placeholder="Type other crops not listed, separated by commas"
+                placeholder="Type poultry, eggs, livestock, dairy, fish, inputs, services, or other crops"
                 className="rounded-xl"
               />
-              <p className="text-xs text-muted-foreground">Use the checkboxes for common crops, and type any extra crops here.</p>
+              <p className="text-xs text-muted-foreground">
+                Use the checkboxes for common enterprises, and type anything extra here.
+              </p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

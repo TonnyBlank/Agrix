@@ -21,6 +21,10 @@ import {
   Target,
   ClipboardCheck,
   Sparkles,
+  Layers,
+  Truck,
+  Banknote,
+  Radar,
 } from "lucide-react";
 
 interface CompanyProfile {
@@ -628,6 +632,7 @@ export default function CompanyDashboard() {
     },
   ];
   const quickActions = [
+    { href: "/dashboard/services", label: "Services Hub", icon: Layers },
     { href: "/dashboard/company/products", label: "Manage catalog", icon: Package },
     { href: "/dashboard/company/procurement", label: "Open procurement", icon: Target },
     { href: "/dashboard/company/partners", label: "Farmer partners", icon: Users },
@@ -672,6 +677,32 @@ export default function CompanyDashboard() {
     serviceAreas.length
       ? `${serviceAreas.length} service ${serviceAreas.length === 1 ? "area" : "areas"} configured`
       : "Service areas still need to be configured",
+  ];
+  const serviceCenterCards = [
+    {
+      title: "Trade channels",
+      description: "Marketplace, B2B procurement, wholesale demand, and retail routes for agricultural supply.",
+      href: "/dashboard/services",
+      icon: ShoppingCart,
+    },
+    {
+      title: "Logistics visibility",
+      description: "Transport, cold-chain, storage, and order tracking signals for active supply.",
+      href: "/dashboard/services",
+      icon: Truck,
+    },
+    {
+      title: "Finance options",
+      description: "Microloans, insurance readiness, and green credit signals from verified activity.",
+      href: "/dashboard/services",
+      icon: Banknote,
+    },
+    {
+      title: "GMCIS intelligence",
+      description: "Geospatial, climate, commodity, market, and AI advisory insight for agricultural decisions.",
+      href: "/dashboard/services",
+      icon: Radar,
+    },
   ];
 
   return (
@@ -722,6 +753,10 @@ export default function CompanyDashboard() {
               <Link to="/dashboard/marketplace" className="inline-flex items-center rounded-xl border border-border bg-white/90 px-4 py-3 text-sm font-semibold text-foreground transition-colors hover:bg-muted dark:bg-background/70">
                 Explore marketplace
                 <ShoppingCart className="ml-2 h-4 w-4" />
+              </Link>
+              <Link to="/dashboard/services" className="inline-flex items-center rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 transition-colors hover:bg-emerald-100 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200">
+                Open services hub
+                <Layers className="ml-2 h-4 w-4" />
               </Link>
             </div>
           </div>
@@ -822,6 +857,37 @@ export default function CompanyDashboard() {
                     : "No procurement requests are live yet."}
                 </p>
               </div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-[1.2rem] bg-background p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">Services Hub</p>
+                <h4 className="mt-1 font-display text-lg font-bold text-foreground">Company operating layer</h4>
+              </div>
+              <Link to="/dashboard/services" className="text-sm font-semibold text-primary hover:underline">
+                Open
+              </Link>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {serviceCenterCards.map((card) => (
+                <Link
+                  key={card.title}
+                  to={card.href}
+                  className="group rounded-[1rem] border border-border/80 bg-card p-4 transition-colors hover:border-primary/35 hover:bg-primary/5"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                      <card.icon className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-foreground">{card.title}</p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{card.description}</p>
+                    </div>
+                  </div>
+                </Link>
+              ))}
             </div>
           </div>
 

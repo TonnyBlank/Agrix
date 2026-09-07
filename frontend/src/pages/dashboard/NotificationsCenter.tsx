@@ -441,7 +441,7 @@ export default function NotificationsCenter() {
         });
       }
 
-      if (role !== "company" && !productsLoading && products.length === 0) {
+      if (!productsLoading && products.length === 0) {
         roleItems.push({
           id: "farmer-products",
           title: "Publish your first listing",

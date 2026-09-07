@@ -11,20 +11,20 @@ import {
 const features = [
   {
     icon: Camera,
-    title: "AI Crop Scanner",
-    description: "Upload a photo of your crops. Advanced AI instantly detects pests, diseases, and nutrient deficiencies.",
-    tag: "Computer Vision",
+    title: "AI Farm Intelligence",
+    description: "Scan crop issues, then combine weather, listings, orders, and profile data into practical farmer advice.",
+    tag: "Advisory AI",
   },
   {
     icon: TrendingUp,
     title: "Dynamic Marketplace",
-    description: "List your produce directly to verified buyers. A robust e-commerce platform built for the agricultural sector.",
+    description: "List produce, eggs, dairy, livestock, fish, honey, inputs, or services directly to verified buyers.",
     tag: "Trade Direct",
   },
   {
     icon: Shield,
     title: "Secure Escrow",
-    description: "Funds are held securely until digital signature delivery confirmation. Built-in logic deducts penalties if buyers refuse without cause.",
+    description: "Buyer payments are held in AgriLink escrow until delivery is confirmed through OTP or official admin sign-off. Delivery issues move into dispute review before payout or refund decisions.",
     tag: "Protection",
   },
   {
@@ -36,13 +36,13 @@ const features = [
   {
     icon: Brain,
     title: "Farm Profiling",
-    description: "Record detailed agricultural data—soil type, irrigation, farm size—to automatically improve your loan eligibility.",
+    description: "Record crops, livestock, poultry, storage, transport, location, and farm capacity to improve trust and eligibility.",
     tag: "Smart Data",
   },
   {
     icon: CreditCard,
     title: "In-Kind Repayment",
-    description: "Pay back loans with your produce! The escrow system automatically deducts repayment amounts when you sell your harvest.",
+    description: "Repay from verified agricultural sales, with escrow logic deducting repayment amounts when trade is completed.",
     tag: "Flexibility",
   },
 ];
@@ -59,7 +59,7 @@ const item = {
 
 export default function FeaturesSection() {
   return (
-    <section id="features" className="bg-background py-24 md:py-32">
+    <section id="features" className="scroll-mt-20 bg-background py-24 md:scroll-mt-24 md:py-32">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -74,7 +74,7 @@ export default function FeaturesSection() {
             6 Features That Change <span className="text-gradient-gold">Everything</span>
           </h2>
           <p className="mx-auto max-w-2xl text-lg text-muted-foreground">
-            Not just a marketplace for crops and trade, but an ecosystem that makes Kenyan agriculture
+            Not just a marketplace for crops, poultry, livestock, and trade, but an ecosystem that makes Kenyan agriculture
             intelligent, profitable, and connected.
           </p>
         </motion.div>

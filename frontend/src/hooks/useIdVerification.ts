@@ -13,7 +13,7 @@ type VerificationSnapshot = {
 
 const verificationCache = new Map<string, VerificationSnapshot>();
 
-export type VerificationStatus = "unverified" | "pending" | "verified" | "rejected";
+export type VerificationStatus = "unverified" | "pending" | "pending_review" | "verified" | "rejected";
 
 export type IDVerification = {
   id?: string;
@@ -64,12 +64,12 @@ export function useIdVerification() {
 
         if (fallbackError) throw fallbackError;
 
-        const normalized = data
+        const normalized: IDVerification = data
           ? {
               ...data,
               status: (data.status as VerificationStatus) || "unverified",
             }
-          : { status: "unverified" };
+          : { status: "unverified" as const };
 
         setVerification(normalized);
         verificationCache.set(user.id, { verification: normalized, fetchedAt: Date.now() });

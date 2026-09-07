@@ -18,7 +18,7 @@ const plans = [
       { text: "Limited buyer chat (10 messages/month)", included: true },
       { text: "Offline mode - sync when back online", included: true },
       { text: "Secure escrow platform payments", included: true },
-      { text: "AI Crop Scanner", included: false },
+      { text: "Advanced AI farm intelligence", included: false },
       { text: "Flexible micro-loans & in-kind repayment", included: false },
     ],
     cta: "Start Free",
@@ -31,8 +31,8 @@ const plans = [
     subtitle: "/month",
     features: [
       { text: "Unlimited product listings", included: true },
-      { text: "AI Crop Scanner & Diagnosis", included: true },
-      { text: "Predict demand & optimize planting", included: true },
+      { text: "AI crop diagnosis and farm advisory", included: true },
+      { text: "Predict demand and optimize production timing", included: true },
       { text: "Priority in buyer search results", included: true },
       { text: "Platform Trust System - secure loans", included: true },
       { text: "Real-time sales analytics & revenue trends", included: true },
@@ -48,7 +48,7 @@ export default function PricingSection() {
   const { role, user } = useAuth();
 
   return (
-    <section id="pricing" className="bg-muted/50 py-24 md:py-32">
+    <section id="pricing" className="scroll-mt-20 bg-muted/50 py-24 md:scroll-mt-24 md:py-32">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -132,7 +132,7 @@ export default function PricingSection() {
                   {plan.features.map((feature) => (
                     <li key={feature.text} className="flex items-start gap-3 text-[15px] leading-6">
                       {feature.included ? (
-                        <Check className={`mt-0.5 h-4 w-4 shrink-0 ${plan.featured ? "text-agri-gold-400" : "text-primary"}`} />
+                        <Check className={`mt-0.5 h-4 w-4 shrink-0 ${plan.featured ? "text-gold-400" : "text-primary"}`} />
                       ) : (
                         <X className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/40" />
                       )}

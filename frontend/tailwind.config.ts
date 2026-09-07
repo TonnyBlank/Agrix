@@ -1,9 +1,10 @@
 import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
+import tailwindcssTypography from "@tailwindcss/typography";
 
 export default {
   darkMode: ["class"],
-  content: ["./pages/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./app/**/*.{ts,tsx}", "./src/**/*.{ts,tsx}"],
+  content: ["./index.html", "./src/**/*.{ts,tsx,js,jsx}"],
   prefix: "",
   theme: {
     container: {
@@ -15,8 +16,10 @@ export default {
     },
     extend: {
       fontFamily: {
-        display: ["Space Grotesk", "sans-serif"],
-        body: ["DM Sans", "sans-serif"],
+        heading: ["var(--font-heading)"],
+        body: ["var(--font-body)"],
+        display: ["var(--font-display)"],
+        mono: ["var(--font-mono)"],
       },
       colors: {
         border: "hsl(var(--border))",
@@ -78,6 +81,13 @@ export default {
           500: "hsl(var(--steel-500))",
           600: "hsl(var(--steel-600))",
         },
+        chart: {
+          "1": "hsl(var(--chart-1))",
+          "2": "hsl(var(--chart-2))",
+          "3": "hsl(var(--chart-3))",
+          "4": "hsl(var(--chart-4))",
+          "5": "hsl(var(--chart-5))",
+        },
         sidebar: {
           DEFAULT: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
@@ -138,5 +148,5 @@ export default {
       },
     },
   },
-  plugins: [tailwindcssAnimate],
+  plugins: [tailwindcssAnimate, tailwindcssTypography],
 } satisfies Config;

@@ -18,19 +18,19 @@ const steps = [
     icon: Handshake,
     step: "03",
     title: "Secure the Deal",
-    description: "Smart escrow securely holds platform funds until buyer delivery verification via digital signature.",
+    description: "Smart escrow holds buyer funds until OTP confirmation or official delivery sign-off.",
   },
   {
     icon: Banknote,
     step: "04",
-    title: "Get Paid Instantly",
-    description: "Once delivery is confirmed, funds move to the farmer without middlemen or delays.",
+    title: "Release Payout",
+    description: "Once delivery is confirmed and checks are clear, the seller payout is released from escrow.",
   },
 ];
 
 export default function HowItWorksSection() {
   return (
-    <section id="how-it-works" className="bg-muted/50 py-24 md:py-32">
+    <section id="how-it-works" className="scroll-mt-20 bg-muted/50 py-24 md:scroll-mt-24 md:py-32">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}

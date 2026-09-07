@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CloudSun,
   CreditCard,
+  Layers,
   MapPin,
   MessageSquare,
   Package,
@@ -135,14 +136,20 @@ export default function DashboardHome() {
 
   const quickActions = [
     {
+      title: "Services Hub",
+      description: "Open mixed-agriculture services, trade, logistics, finance, and AI intelligence.",
+      href: "/dashboard/services",
+      icon: Layers,
+    },
+    {
       title: "Add New Listing",
-      description: "Publish fresh produce and update pricing for buyers.",
+      description: "Publish produce, eggs, livestock, dairy, inputs, or services for buyers.",
       href: "/dashboard/products",
       icon: Package,
     },
     {
-      title: "Scan Crop Health",
-      description: "Run a field check and review AI crop diagnostics.",
+      title: "AI Farm Check",
+      description: "Run crop scans and review advisory signals for the next farm decision.",
       href: "/dashboard/ai-scanner",
       icon: ScanLine,
     },

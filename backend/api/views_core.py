@@ -36,6 +36,7 @@ from .common import (
     user_client,
     write_user_notification,
     write_user_notifications,
+    send_sms,
 )
 from .http import HttpRequest, HttpResponse, JsonResponse
 
@@ -59,9 +60,16 @@ def _normalize_optional_account_number(value: Any, field_label: str = "Bank acco
     if not digits:
         raise ApiException(f"{field_label} must contain digits only.", 400)
     return digits
+
+
 AGRILINK_COMMISSION_RATE = 0.05
 ORDER_STATUS_VALUES = {"pending", "confirmed", "processing", "shipped", "delivered", "cancelled"}
 PAID_PLAN_ROLES = {"farmer_pro", "company"}
+SELLER_VERIFIED_ID_STATUSES = {"verified", "approved"}
+SELLER_VERIFICATION_REQUIRED_MESSAGE = (
+    "Your identity must be verified before you can list products. "
+    "Please submit your ID verification under Profile -> ID Verification."
+)
 SUBSCRIPTION_PLAN_DEFAULTS = {
     "farmer_pro": {"amount_kes": 1500, "display_name": "Farmer Pro"},
     "company": {"amount_kes": 5000, "display_name": "Company"},
@@ -88,6 +96,18 @@ DELIVERY_OTP_LENGTH = 6
 DELIVERY_OTP_MAX_ATTEMPTS = 5
 DELIVERY_OTP_TTL_MINUTES = 30
 DELIVERY_DISPUTE_WINDOW_HOURS = 24
+
+
+def require_verified_seller_identity(user_id: str) -> None:
+    verification, _ = admin_client().select(
+        "id_verifications",
+        select="id, status",
+        filters={"user_id": f"eq.{user_id}"},
+        single=True,
+    )
+    status = str((verification or {}).get("status") or "").strip().lower()
+    if status not in SELLER_VERIFIED_ID_STATUSES:
+        raise ApiException(SELLER_VERIFICATION_REQUIRED_MESSAGE, 403)
 
 
 def _subscription_amount_kes(plan_role: str) -> int:
@@ -181,6 +201,24 @@ def _parse_optional_distance_km(value: Any) -> float | None:
     return round(parsed, 2)
 
 
+def _get_county_office_details(pickup_county: str | None) -> dict[str, str] | None:
+    if not pickup_county:
+        return None
+    try:
+        county_clean = str(pickup_county).strip().lower()
+        office, _ = admin_client().select(
+            "agrilink_county_offices",
+            select="office_name, physical_address, contact_phone",
+            filters={"county": f"eq.{county_clean}"},
+            single=True
+        )
+        if office:
+            return office
+    except Exception as e:
+        logger.warning("Failed to lookup county office details for %s: %s", pickup_county, e)
+    return None
+
+
 def _build_delivery_quote(distance_km: float | None, buyer_county: str | None, seller_county: str | None) -> dict[str, Any]:
     same_county = _is_same_county(buyer_county, seller_county)
     effective_distance = float(distance_km) if distance_km is not None else (
@@ -199,6 +237,12 @@ def _build_delivery_quote(distance_km: float | None, buyer_county: str | None, s
     )
     pickup_county = _clean_optional_text(buyer_county) or _clean_optional_text(seller_county)
 
+    office_details = _get_county_office_details(pickup_county)
+    if office_details:
+        office_label = f"{office_details['office_name']} ({office_details['physical_address']}, Tel: {office_details['contact_phone']})"
+    else:
+        office_label = f"{pickup_county} AgriLink County Office" if pickup_county else None
+
     return {
         "same_county": same_county,
         "distance_km": round(effective_distance, 2),
@@ -207,8 +251,9 @@ def _build_delivery_quote(distance_km: float | None, buyer_county: str | None, s
         "rate_per_km_kes": DELIVERY_RATE_PER_KM_KES,
         "inter_county_surcharge_kes": round(surcharge, 2),
         "pickup_county": pickup_county,
-        "pickup_office_label": f"{pickup_county} AgriLink County Office" if pickup_county else None,
+        "pickup_office_label": office_label,
     }
+
 
 
 def _resolve_buyer_farmer_counties(client, buyer_id: str, farmer_id: str | None) -> tuple[str | None, str | None]:
@@ -219,6 +264,121 @@ def _resolve_buyer_farmer_counties(client, buyer_id: str, farmer_id: str | None)
     buyer_county = _clean_optional_text((profiles_by_user_id.get(buyer_id) or {}).get("county"))
     farmer_county = _clean_optional_text((profiles_by_user_id.get(farmer_id or "") or {}).get("county"))
     return buyer_county, farmer_county
+
+
+def _upstream_error_message(exc: requests.HTTPError) -> str:
+    response = exc.response
+    raw_text = response.text.strip() if response is not None and response.text else ""
+    if raw_text:
+        try:
+            payload = json.loads(raw_text)
+            if isinstance(payload, dict):
+                for key in ("message", "error", "details", "hint"):
+                    value = payload.get(key)
+                    if value:
+                        return str(value)
+        except json.JSONDecodeError:
+            return raw_text
+    return str(exc)
+
+
+def _is_missing_marketplace_order_rpc(exc: requests.HTTPError) -> bool:
+    response = exc.response
+    raw_text = response.text if response is not None else str(exc)
+    message = raw_text.lower()
+    return (
+        "place_marketplace_order_v2" in message
+        and (
+            "could not find" in message
+            or "schema cache" in message
+            or "does not exist" in message
+            or "function" in message
+        )
+    )
+
+
+def _create_marketplace_order_without_rpc(
+    *,
+    buyer_id: str,
+    product_id: str,
+    quantity: float,
+    unit: str | None,
+    delivery_quote: dict[str, Any],
+    pickup_county: str | None,
+    notes: str | None,
+) -> dict[str, Any]:
+    admin = admin_client()
+    product, _ = admin.select(
+        "products",
+        select="id, farmer_id, unit, stock, is_available, price_per_unit",
+        filters={"id": f"eq.{product_id}"},
+        single=True,
+    )
+    if not product:
+        raise ApiException("Product not found", 404)
+    if product.get("farmer_id") == buyer_id:
+        raise ApiException("You cannot place an order for your own product", 400)
+    if not bool(product.get("is_available")):
+        raise ApiException("This product is not currently available", 400)
+
+    stock = float(product.get("stock") or 0)
+    if stock < quantity:
+        raise ApiException(f"Only {product.get('stock')} {product.get('unit')} available for this product", 400)
+
+    unit_value = _clean_optional_text(unit) or _clean_optional_text(product.get("unit")) or "unit"
+    subtotal = round(float(product.get("price_per_unit") or 0) * quantity, 2)
+    delivery_fee = round(float(delivery_quote.get("fee_kes") or 0), 2)
+    commission_amount = round(subtotal * AGRILINK_COMMISSION_RATE, 2)
+    seller_payout_amount = round(max(subtotal - commission_amount, 0), 2)
+    next_stock = round(stock - quantity, 2)
+
+    updated_product = admin.update(
+        "products",
+        {"stock": next_stock, "is_available": next_stock > 0},
+        filters={"id": f"eq.{product_id}", "stock": f"gte.{quantity}"},
+    )
+    if not updated_product:
+        raise ApiException("This product no longer has enough stock. Please refresh the marketplace.", 409)
+
+    order_payload = {
+        "product_id": product_id,
+        "buyer_id": buyer_id,
+        "farmer_id": product.get("farmer_id"),
+        "quantity": quantity,
+        "unit": unit_value,
+        "total_price": subtotal,
+        "delivery_fee": delivery_fee,
+        "delivery_distance_km": delivery_quote.get("distance_km"),
+        "delivery_base_fee": delivery_quote.get("base_fee_kes"),
+        "delivery_rate_per_km": delivery_quote.get("rate_per_km_kes"),
+        "inter_county_surcharge": delivery_quote.get("inter_county_surcharge_kes"),
+        "delivery_mode": "county_office_pickup",
+        "pickup_county": pickup_county,
+        "pickup_office_label": delivery_quote.get("pickup_office_label"),
+        "delivery_disclaimer": COUNTY_PICKUP_DISCLAIMER,
+        "status": "pending",
+        "payment_method": "mpesa",
+        "payment_status": "unpaid",
+        "notes": notes,
+        "escrow_amount": round(subtotal + delivery_fee, 2),
+        "agrilink_commission_rate": AGRILINK_COMMISSION_RATE,
+        "agrilink_commission_amount": commission_amount,
+        "seller_payout_amount": seller_payout_amount,
+        "payout_status": "pending_payment",
+    }
+
+    try:
+        return admin.insert("orders", order_payload, single=True)
+    except Exception:
+        try:
+            admin.update(
+                "products",
+                {"stock": stock, "is_available": bool(product.get("is_available"))},
+                filters={"id": f"eq.{product_id}"},
+            )
+        except Exception as rollback_exc:
+            logger.warning("Failed to roll back stock after fallback order insert failed for %s: %s", product_id, rollback_exc)
+        raise
 
 
 def attach_order_meta(client, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -338,6 +498,55 @@ def compute_order_financials(order: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def ensure_logistics_dispatch_for_order(client, order: dict[str, Any]) -> dict[str, Any] | None:
+    order_id = str(order.get("id") or "").strip()
+    if not order_id:
+        return None
+
+    existing, _ = client.select("logistics_dispatches", filters={"order_id": f"eq.{order_id}"}, single=True)
+    if existing:
+        return existing
+
+    pickup_label = _clean_optional_text(order.get("pickup_office_label")) or _clean_optional_text(order.get("pickup_county"))
+    dispatch = client.insert(
+        "logistics_dispatches",
+        {
+            "order_id": order_id,
+            "status": "open",
+            "pickup_location": "Seller pickup point",
+            "dropoff_location": pickup_label or "AgriLink county handover point",
+        },
+        single=True,
+    )
+
+    try:
+        roles, _ = client.select("user_roles", select="user_id", filters={"role": "eq.transporter"}, limit=25)
+        transporter_ids = [str(row.get("user_id") or "").strip() for row in roles or [] if str(row.get("user_id") or "").strip()]
+        if transporter_ids:
+            write_user_notifications(
+                client,
+                user_ids=transporter_ids,
+                title="New dispatch available",
+                message=f"Paid order #{order_id[:8]} is ready for logistics acceptance.",
+                priority="high",
+                category="action",
+                entity_type="logistics_dispatch",
+                entity_id=str(dispatch.get("id") or "") or None,
+                action_url="/dashboard/logistics",
+                source="system",
+                metadata={"order_id": order_id},
+            )
+            profiles_by_id = load_profiles_by_user_ids(client, transporter_ids, "user_id, phone")
+            for profile in profiles_by_id.values():
+                phone = profile.get("phone")
+                if phone:
+                    send_sms(phone, f"AgriLink X: Paid order #{order_id[:8]} is ready for dispatch. Open Logistics to accept.")
+    except Exception as exc:
+        logger.warning("Failed to notify transporters for order %s: %s", order_id, exc)
+
+    return dispatch
+
+
 def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
     farmer_id = order.get("farmer_id")
     order_id = str(order.get("id") or "")
@@ -363,7 +572,7 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
 
         repayments, _ = client.select(
             "micro_loan_repayments",
-            select="id, amount, created_at, payment_method, payment_ref, phone_number, note",
+            select="id, amount, created_at, payment_method, payment_status, payment_ref, phone_number, note",
             filters={"loan_application_id": f"eq.{loan['id']}"},
             order="created_at.asc",
         )
@@ -374,7 +583,7 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
             loan.get("interest_rate"),
             loan.get("repayment_days"),
             loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-            repayments or [],
+            _paid_loan_repayments(repayments or []),
         )
 
         remaining_balance = float(schedule["summary"]["remainingBalance"])
@@ -391,8 +600,10 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
                 "user_id": farmer_id,
                 "amount": deduction,
                 "payment_method": "pay_with_produce",
+                "payment_status": "paid",
                 "payment_ref": f"ESCROW-{order_id[:8]}",
                 "phone_number": None,
+                "verified_at": now_iso(),
                 "note": f"Automatic Pay-with-Produce deduction from released payout for order {order_id[:8]}.",
             },
             single=True,
@@ -404,7 +615,7 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
             loan.get("interest_rate"),
             loan.get("repayment_days"),
             loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-            [*(repayments or []), repayment],
+            _paid_loan_repayments([*(repayments or []), repayment]),
         )
 
         next_status = "repaid" if next_schedule["summary"]["remainingBalance"] <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
@@ -413,6 +624,9 @@ def apply_pay_with_produce_deductions(client, order: dict[str, Any]):
             "micro_loan_applications",
             {
                 "status": next_status,
+                "repayment_status": "repaid" if next_status == "repaid" else "on_track",
+                "arrears_status": "repaid" if next_status == "repaid" else str(loan.get("arrears_status") or "current"),
+                "ledger_status": "closed" if next_status == "repaid" else str(loan.get("ledger_status") or "open"),
                 "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
                 "repaid_at": now_iso() if next_status == "repaid" else None,
                 "updated_at": now_iso(),
@@ -520,6 +734,33 @@ def mark_order_paid(order_id: str, checkout_request_id: str, receipt_number: str
         filters={"id": f"eq.{order_id}"},
     )
 
+    # SMS notification to buyer and farmer of successful payment
+    try:
+        buyer_id = str(order.get("buyer_id") or "")
+        farmer_id = str(order.get("farmer_id") or "")
+        buyer_phone = _fetch_profile_phone(admin, buyer_id) if buyer_id else None
+        farmer_phone = _fetch_profile_phone(admin, farmer_id) if farmer_id else None
+        total_kes = financials["escrow_amount"]
+
+        if buyer_phone:
+            send_sms(
+                buyer_phone,
+                f"AgriLink X: Payment of KES {total_kes} received for order #{order_id[:8]}. Preparing order."
+            )
+        if farmer_phone:
+            send_sms(
+                farmer_phone,
+                f"AgriLink X: Order #{order_id[:8]} has been paid. Please prepare and ship."
+            )
+    except Exception as sms_exc:
+        logger.warning("Failed to send payment SMS: %s", sms_exc)
+
+    try:
+        ensure_logistics_dispatch_for_order(admin, {**order, "id": order_id})
+    except Exception as dispatch_exc:
+        logger.warning("Failed to create logistics dispatch for order %s: %s", order_id, dispatch_exc)
+
+
 
 def _extract_mpesa_receipt_number(payload: dict[str, Any] | None) -> str | None:
     if not isinstance(payload, dict):
@@ -583,20 +824,58 @@ def _activate_paid_subscription(
 
 
 def _restock_cancelled_order_item(client, order: dict[str, Any]) -> None:
+    """Atomically restore stock when an order is cancelled.
+    Uses the increment_product_stock RPC to avoid TOCTOU races.
+    """
     if not order.get("product_id"):
         return
     if order.get("status") not in {"pending", "confirmed", "processing"}:
         return
-
-    product, _ = client.select("products", select="id, stock", filters={"id": f"eq.{order['product_id']}"}, single=True)
-    if not product:
+    qty = float(order.get("quantity") or 0)
+    if qty <= 0:
         return
-    next_stock = round(float(product.get("stock") or 0) + float(order.get("quantity") or 0), 2)
-    client.update(
-        "products",
-        {"stock": next_stock, "is_available": next_stock > 0},
-        filters={"id": f"eq.{order['product_id']}"},
-    )
+    try:
+        client.rpc("increment_product_stock", {"p_product_id": order["product_id"], "p_quantity": qty})
+    except Exception:
+        # Fallback to read-then-write if RPC is not yet deployed
+        product, _ = client.select("products", select="id, stock", filters={"id": f"eq.{order['product_id']}"}, single=True)
+        if not product:
+            return
+        next_stock = round(float(product.get("stock") or 0) + qty, 2)
+        client.update(
+            "products",
+            {"stock": next_stock, "is_available": next_stock > 0},
+            filters={"id": f"eq.{order['product_id']}"},
+        )
+
+
+def _restock_failed_order(client, order: dict[str, Any]) -> None:
+    """Atomically restore stock when a payment fails or times out.
+    Only restores for orders that were never delivered or cancelled.
+    """
+    if not order.get("product_id"):
+        return
+    # Callback retries and repeated status checks must not restore stock twice.
+    if str(order.get("payment_status") or "").strip().lower() == "failed":
+        return
+    if order.get("status") in {"delivered", "cancelled"}:
+        return
+    qty = float(order.get("quantity") or 0)
+    if qty <= 0:
+        return
+    try:
+        client.rpc("increment_product_stock", {"p_product_id": order["product_id"], "p_quantity": qty})
+    except Exception:
+        # Fallback to read-then-write if RPC is not yet deployed
+        product, _ = client.select("products", select="id, stock", filters={"id": f"eq.{order['product_id']}"}, single=True)
+        if not product:
+            return
+        next_stock = round(float(product.get("stock") or 0) + qty, 2)
+        client.update(
+            "products",
+            {"stock": next_stock, "is_available": next_stock > 0},
+            filters={"id": f"eq.{order['product_id']}"},
+        )
 
 
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
@@ -1043,9 +1322,12 @@ def _products_create(request: HttpRequest):
         raise ApiException(f"Complete your profile before uploading products. Missing: {', '.join(missing)}.", 403)
     role = resolve_app_role(request.supabase, request.user_id, getattr(request, "requested_role", None))
     if role == "farmer_free":
+        require_verified_seller_identity(request.user_id)
         _, count = request.supabase.select("products", filters={"farmer_id": f"eq.{request.user_id}"}, head=True, count="exact")
         if (count or 0) >= 10:
             raise ApiException("Free plan reached the 10 product limit. Upgrade to Pro for unlimited listings.", 403)
+    elif role in {"farmer_pro"}:
+        require_verified_seller_identity(request.user_id)
     created = request.supabase.insert(
         "products",
         {
@@ -1190,12 +1472,46 @@ def products_upload_image(request: HttpRequest):
 def orders_selling(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
-    rows, _ = request.supabase.select(
-        "orders",
-        filters={"farmer_id": f"eq.{request.user_id}"},
-        order="created_at.desc",
-    )
-    return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
+
+    filters: dict[str, Any] = {"farmer_id": f"eq.{request.user_id}"}
+    params = request.GET
+
+    # Status filter: ?status=pending or ?status=confirmed,shipped
+    status_raw = str(params.get("status") or "").strip().lower()
+    if status_raw and status_raw != "all":
+        statuses = [s.strip() for s in status_raw.split(",") if s.strip() in ORDER_STATUS_VALUES]
+        if len(statuses) == 1:
+            filters["status"] = f"eq.{statuses[0]}"
+        elif statuses:
+            filters["status"] = f"in.({','.join(statuses)})"
+
+    # Payment status filter: ?payment_status=paid
+    pstatus = str(params.get("payment_status") or "").strip().lower()
+    VALID_PAYMENT_STATUSES = {"unpaid", "initiated", "pending_confirmation", "paid", "failed"}
+    if pstatus and pstatus in VALID_PAYMENT_STATUSES:
+        filters["payment_status"] = f"eq.{pstatus}"
+
+    # Date range: ?from=2026-01-01&to=2026-12-31
+    from_date = str(params.get("from") or "").strip()
+    to_date = str(params.get("to") or "").strip()
+    if from_date:
+        filters["created_at"] = f"gte.{from_date}"
+    if to_date:
+        filters["created_at"] = f"lte.{to_date}"
+
+    rows, _ = request.supabase.select("orders", filters=filters, order="created_at.desc")
+    orders = attach_order_meta(request.supabase, rows or [])
+
+    # Text search on product name: ?search=maize
+    search = str(params.get("search") or "").strip().lower()
+    if search:
+        orders = [
+            o for o in orders
+            if search in str((o.get("product") or {}).get("name") or "").lower()
+            or search in str(o.get("notes") or "").lower()
+        ]
+
+    return JsonResponse(orders, safe=False)
 
 
 @api_view
@@ -1203,12 +1519,47 @@ def orders_selling(request: HttpRequest):
 def orders_buying(request: HttpRequest):
     if request.method != "GET":
         return method_not_allowed(["GET"])
-    rows, _ = request.supabase.select(
-        "orders",
-        filters={"buyer_id": f"eq.{request.user_id}"},
-        order="created_at.desc",
-    )
-    return JsonResponse(attach_order_meta(request.supabase, rows or []), safe=False)
+
+    filters: dict[str, Any] = {"buyer_id": f"eq.{request.user_id}"}
+    params = request.GET
+
+    # Status filter: ?status=pending or ?status=confirmed,shipped
+    status_raw = str(params.get("status") or "").strip().lower()
+    if status_raw and status_raw != "all":
+        statuses = [s.strip() for s in status_raw.split(",") if s.strip() in ORDER_STATUS_VALUES]
+        if len(statuses) == 1:
+            filters["status"] = f"eq.{statuses[0]}"
+        elif statuses:
+            filters["status"] = f"in.({','.join(statuses)})"
+
+    # Payment status filter: ?payment_status=paid
+    pstatus = str(params.get("payment_status") or "").strip().lower()
+    VALID_PAYMENT_STATUSES = {"unpaid", "initiated", "pending_confirmation", "paid", "failed"}
+    if pstatus and pstatus in VALID_PAYMENT_STATUSES:
+        filters["payment_status"] = f"eq.{pstatus}"
+
+    # Date range: ?from=2026-01-01&to=2026-12-31
+    from_date = str(params.get("from") or "").strip()
+    to_date = str(params.get("to") or "").strip()
+    if from_date:
+        filters["created_at"] = f"gte.{from_date}"
+    if to_date:
+        filters["created_at"] = f"lte.{to_date}"
+
+    rows, _ = request.supabase.select("orders", filters=filters, order="created_at.desc")
+    orders = attach_order_meta(request.supabase, rows or [])
+
+    # Text search on product name: ?search=maize
+    search = str(params.get("search") or "").strip().lower()
+    if search:
+        orders = [
+            o for o in orders
+            if search in str((o.get("product") or {}).get("name") or "").lower()
+            or search in str(o.get("notes") or "").lower()
+            or search in str((o.get("farmer_profile") or {}).get("full_name") or "").lower()
+        ]
+
+    return JsonResponse(orders, safe=False)
 
 
 @api_view
@@ -1246,21 +1597,67 @@ def orders_root(request: HttpRequest):
     )
     delivery_quote = _build_delivery_quote(provided_distance_km, buyer_county, seller_county)
     pickup_county = _clean_optional_text(body.get("pickup_county")) or delivery_quote.get("pickup_county")
+    notes = str(body.get("notes") or "").strip() or None
+    order_rpc_payload = {
+        "p_product_id": product_id,
+        "p_quantity": quantity,
+        "p_unit": body.get("unit") or product.get("unit"),
+        "p_delivery_fee": delivery_quote["fee_kes"],
+        "p_notes": notes,
+        "p_delivery_distance_km": delivery_quote["distance_km"],
+        "p_pickup_county": pickup_county,
+    }
 
-    result = request.supabase.rpc(
-        "place_marketplace_order_v2",
-        {
-            "p_product_id": product_id,
-            "p_quantity": quantity,
-            "p_unit": body.get("unit") or product.get("unit"),
-            "p_delivery_fee": delivery_quote["fee_kes"],
-            "p_notes": str(body.get("notes") or "").strip() or None,
-            "p_delivery_distance_km": delivery_quote["distance_km"],
-            "p_pickup_county": pickup_county,
-        },
-    )
-    rows = result if isinstance(result, list) else [result] if result else []
-    return JsonResponse(attach_order_meta(request.supabase, rows)[0], status=201)
+    try:
+        result = request.supabase.rpc("place_marketplace_order_v2", order_rpc_payload)
+        rows = result if isinstance(result, list) else [result] if result else []
+        if not rows:
+            raise ApiException("Order could not be created. Please try again.", 500)
+        created_order = rows[0]
+    except requests.HTTPError as exc:
+        if not _is_missing_marketplace_order_rpc(exc):
+            status_code = exc.response.status_code if exc.response is not None else 502
+            raise ApiException(_upstream_error_message(exc), 400 if status_code < 500 else 502)
+        logger.warning("place_marketplace_order_v2 is unavailable; using backend order fallback.")
+        created_order = _create_marketplace_order_without_rpc(
+            buyer_id=request.user_id,
+            product_id=product_id,
+            quantity=quantity,
+            unit=body.get("unit") or product.get("unit"),
+            delivery_quote=delivery_quote,
+            pickup_county=pickup_county,
+            notes=notes,
+        )
+
+    # Clear the buyer's cart item for this product now that the order is placed
+    try:
+        admin_client().delete(
+            "cart_items",
+            filters={"buyer_id": f"eq.{request.user_id}", "product_id": f"eq.{product_id}"},
+        )
+    except Exception as exc:
+        logger.warning("Could not clear cart item after order %s: %s", created_order.get("id"), exc)
+
+    # SMS notification to buyer and farmer
+    try:
+        buyer_phone = _fetch_profile_phone(admin_client(), request.user_id)
+        farmer_id = str(product.get("farmer_id") or "")
+        farmer_phone = _fetch_profile_phone(admin_client(), farmer_id) if farmer_id else None
+
+        if buyer_phone:
+            send_sms(
+                buyer_phone,
+                f"AgriLink X: You placed order #{created_order['id'][:8]} for {quantity} {product.get('unit', 'kg')}. Status: unpaid."
+            )
+        if farmer_phone:
+            send_sms(
+                farmer_phone,
+                f"AgriLink X: New pending order #{created_order['id'][:8]} received. Awaiting buyer payment."
+            )
+    except Exception as sms_exc:
+        logger.warning("Failed to send order placement SMS notifications: %s", sms_exc)
+
+    return JsonResponse(attach_order_meta(request.supabase, [created_order])[0], status=201)
 
 
 @api_view
@@ -1289,6 +1686,167 @@ def order_status(request: HttpRequest, order_id: str):
         "payout_status": _derive_payout_status(status, next_payment_status),
     }
     updated = request.supabase.update("orders", updates, filters={"id": f"eq.{order_id}"}, single=True)
+    _notify_order_status_change(updated)
+    return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
+
+
+def _fetch_profile_phone(client, user_id: str) -> str | None:
+    try:
+        profile, _ = client.select("profiles", select="phone", filters={"user_id": f"eq.{user_id}"}, single=True)
+        return profile.get("phone") if profile else None
+    except Exception:
+        return None
+
+
+def _is_assigned_transporter_for_order(client, order_id: str, user_id: str) -> bool:
+    try:
+        dispatch, _ = client.select(
+            "logistics_dispatches",
+            select="id, status",
+            filters={"order_id": f"eq.{order_id}", "transporter_id": f"eq.{user_id}"},
+            single=True,
+        )
+        return str((dispatch or {}).get("status") or "") in {"accepted", "picked_up", "in_transit", "delivered"}
+    except Exception:
+        return False
+
+
+def _notify_order_status_change(order: dict[str, Any]) -> None:
+    """Send in-app notifications to buyer and farmer when order status changes."""
+    order_id = str(order.get("id") or "")
+    status = str(order.get("status") or "")
+    buyer_id = str(order.get("buyer_id") or "")
+    farmer_id = str(order.get("farmer_id") or "")
+    admin = admin_client()
+
+    STATUS_MESSAGES: dict[str, tuple[str, str, str, str]] = {
+        # status: (buyer_title, buyer_msg, farmer_title, farmer_msg)
+        "confirmed": (
+            "Order confirmed", "Your order has been confirmed by the farmer and is being prepared.",
+            "Order confirmed", "You confirmed an order. Please prepare the produce for delivery.",
+        ),
+        "processing": (
+            "Order being processed", "Your produce is being prepared and packaged.",
+            "Order in processing", "Your order is marked as processing. Update when shipped.",
+        ),
+        "shipped": (
+            "Order shipped 🚚", "Your produce is on its way to the county office!",
+            "Order shipped", "You marked the order as shipped. Buyer has been notified.",
+        ),
+        "delivered": (
+            "Order delivered ✅", "Your produce arrived at the county office. Please confirm receipt with your OTP.",
+            "Delivery marked", "You marked the order as delivered. Awaiting buyer OTP confirmation.",
+        ),
+        "cancelled": (
+            "Order cancelled", "Your order was cancelled. Any paid amount will be reviewed for refund.",
+            "Order cancelled", "An order was cancelled. Stock has been restored.",
+        ),
+    }
+    if status not in STATUS_MESSAGES:
+        return
+    b_title, b_msg, f_title, f_msg = STATUS_MESSAGES[status]
+    try:
+        write_user_notifications(
+            admin,
+            user_ids=[uid for uid in [buyer_id, farmer_id] if uid],
+            title=b_title if buyer_id else f_title,
+            message=b_msg if buyer_id else f_msg,
+            priority="high" if status in {"shipped", "delivered", "cancelled"} else "medium",
+            category="update",
+            entity_type="order",
+            entity_id=order_id,
+            action_url="/dashboard/orders",
+            source="system",
+        )
+        # Per-user tailored messages
+        if buyer_id:
+            write_user_notification(admin, user_id=buyer_id, title=b_title, message=b_msg,
+                priority="high" if status in {"shipped", "delivered", "cancelled"} else "medium",
+                category="update", entity_type="order", entity_id=order_id, action_url="/dashboard/orders")
+            # SMS notification
+            b_phone = _fetch_profile_phone(admin, buyer_id)
+            if b_phone:
+                send_sms(b_phone, f"AgriLink X: {b_msg} (Order #{order_id[:8]})")
+
+        if farmer_id:
+            write_user_notification(admin, user_id=farmer_id, title=f_title, message=f_msg,
+                priority="medium", category="update", entity_type="order", entity_id=order_id,
+                action_url="/dashboard/orders")
+            # SMS notification
+            f_phone = _fetch_profile_phone(admin, farmer_id)
+            if f_phone:
+                send_sms(f_phone, f"AgriLink X: {f_msg} (Order #{order_id[:8]})")
+    except Exception as exc:
+        logger.warning("Failed to send order status notifications for %s: %s", order_id, exc)
+
+
+
+@api_view
+@require_auth
+def order_cancel(request: HttpRequest, order_id: str):
+    """Buyer-facing order cancellation — only allowed before payment is confirmed."""
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "buyer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+
+    current_status = str(order.get("status") or "")
+    current_payment = str(order.get("payment_status") or "unpaid")
+
+    if current_status == "cancelled":
+        return JsonResponse(attach_order_meta(request.supabase, [order])[0])
+
+    if current_payment == "paid":
+        raise ApiException(
+            "Payment was already confirmed. You cannot cancel a paid order. "
+            "Please use the dispute option if there is a problem.",
+            400,
+        )
+    if current_status in {"shipped", "delivered"}:
+        raise ApiException(
+            f"Orders that are '{current_status}' cannot be cancelled by the buyer.", 400
+        )
+
+    now_label = now_iso()
+    body = parse_json_body(request)
+    cancel_reason = _clean_optional_text(body.get("reason")) or "Cancelled by buyer"
+
+    updated = admin_client().update(
+        "orders",
+        {
+            "status": "cancelled",
+            "payout_status": "cancelled",
+            "payment_error": cancel_reason,
+            "updated_at": now_label,
+        },
+        filters={"id": f"eq.{order_id}"},
+        single=True,
+    )
+
+    # Restore stock
+    _restock_cancelled_order_item(admin_client(), order)
+
+    # Notify the farmer
+    write_user_notification(
+        admin_client(),
+        user_id=str(order.get("farmer_id") or ""),
+        title="Order cancelled by buyer",
+        message=f"A buyer cancelled their order. Reason: {cancel_reason}. Stock has been restored.",
+        priority="high",
+        category="update",
+        entity_type="order",
+        entity_id=order_id,
+        action_url="/dashboard/orders",
+        source="user",
+        source_user_id=request.user_id,
+    )
+
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
 
 
@@ -1359,16 +1917,17 @@ def order_delivery_otp_request(request: HttpRequest, order_id: str):
     if request.method != "POST":
         return method_not_allowed(["POST"])
 
-    order, _ = request.supabase.select(
-        "orders",
-        filters={"id": f"eq.{order_id}", "farmer_id": f"eq.{request.user_id}"},
-        single=True,
-    )
+    admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
     if not order:
         raise ApiException("Order not found.", 404)
+    is_farmer = str(order.get("farmer_id") or "") == request.user_id
+    is_assigned_transporter = _is_assigned_transporter_for_order(admin, order_id, request.user_id)
+    if not is_farmer and not is_assigned_transporter:
+        raise ApiException("Only the seller or assigned transporter can request this delivery OTP.", 403)
     if order.get("status") != "delivered":
         raise ApiException("Mark the order as delivered before requesting buyer OTP.", 400)
-    if not _clean_optional_text(order.get("delivery_proof_photo_url")):
+    if not _clean_optional_text(order.get("delivery_proof_photo_url")) and not is_assigned_transporter:
         raise ApiException("Submit delivery proof first before requesting buyer OTP.", 400)
     if order.get("payout_status") == "released":
         raise ApiException("Payout is already released for this order.", 400)
@@ -1377,7 +1936,7 @@ def order_delivery_otp_request(request: HttpRequest, order_id: str):
     now_dt = datetime.utcnow().replace(microsecond=0)
     now_label = now_dt.isoformat() + "Z"
     expires_at = (now_dt + timedelta(minutes=DELIVERY_OTP_TTL_MINUTES)).isoformat() + "Z"
-    updated = request.supabase.update(
+    updated = admin.update(
         "orders",
         {
             "buyer_delivery_otp_hash": _hash_delivery_otp(order_id, otp_code),
@@ -1391,11 +1950,12 @@ def order_delivery_otp_request(request: HttpRequest, order_id: str):
         filters={"id": f"eq.{order_id}"},
         single=True,
     )
+    requester_label = "The transporter" if is_assigned_transporter and not is_farmer else "The seller"
     write_user_notification(
-        admin_client(),
+        admin,
         user_id=str(updated.get("buyer_id") or order.get("buyer_id") or "").strip() or None,
         title="Delivery confirmation code ready",
-        message="The seller requested delivery confirmation. Use the OTP shown in your orders workflow to confirm delivery.",
+        message=f"{requester_label} requested delivery confirmation. Use the OTP shown in your orders workflow to confirm delivery.",
         priority="high",
         category="action",
         entity_type="order",
@@ -1405,12 +1965,23 @@ def order_delivery_otp_request(request: HttpRequest, order_id: str):
         source_user_id=request.user_id,
         metadata={"otp_expires_at": expires_at},
     )
+
+    # Fetch buyer's phone to send SMS OTP
+    buyer_id = str(updated.get("buyer_id") or order.get("buyer_id") or "")
+    if buyer_id:
+        buyer_phone = _fetch_profile_phone(admin, buyer_id)
+        if buyer_phone:
+            send_sms(
+                buyer_phone,
+                f"AgriLink X: Your OTP to confirm receipt of order #{order_id[:8]} is {otp_code}. Valid for {DELIVERY_OTP_TTL_MINUTES} mins."
+            )
+
     return JsonResponse(
         {
             "message": "Buyer delivery OTP created.",
             "otp_code": otp_code,
             "otp_expires_at": expires_at,
-            "order": attach_order_meta(request.supabase, [updated])[0],
+            "order": attach_order_meta(admin, [updated])[0],
         }
     )
 
@@ -2018,6 +2589,14 @@ def payment_mpesa_status(request: HttpRequest, order_id: str):
         raise ApiException("Order not found", 404)
     if order.get("payment_status") == "paid":
         return JsonResponse({"payment_status": "paid", "resultCode": "0", "resultDesc": "Payment already confirmed"})
+    if order.get("payment_status") == "failed":
+        return JsonResponse(
+            {
+                "payment_status": "failed",
+                "resultCode": "",
+                "resultDesc": order.get("payment_error") or "The M-Pesa payment failed. Please start a new payment.",
+            }
+        )
     if not order.get("checkout_request_id"):
         raise ApiException("No M-Pesa request found for this order", 400)
     try:
@@ -2040,6 +2619,8 @@ def payment_mpesa_status(request: HttpRequest, order_id: str):
             },
             filters={"id": f"eq.{order['id']}"},
         )
+        # Restore stock so other buyers can purchase this product
+        _restock_failed_order(admin_client(), order)
     else:
         request.supabase.update(
             "orders",
@@ -2212,6 +2793,110 @@ def payment_subscription_mpesa_status(request: HttpRequest, payment_id: str):
     )
 
 
+def _paid_loan_repayments(repayments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [
+        repayment
+        for repayment in (repayments or [])
+        if str(repayment.get("payment_status") or "paid").strip().lower() == "paid"
+    ]
+
+
+def _sync_micro_loan_repayment_payment(
+    admin,
+    checkout_request_id: str,
+    payment_status: str,
+    result_desc: str,
+    receipt_number: str | None,
+) -> None:
+    repayment, _ = admin.select(
+        "micro_loan_repayments",
+        select="id, loan_application_id, user_id, amount, payment_method, payment_status, payment_ref, phone_number, checkout_request_id, created_at",
+        filters={"checkout_request_id": f"eq.{checkout_request_id}"},
+        single=True,
+    )
+    if not repayment:
+        return
+
+    if payment_status == "paid":
+        admin.update(
+            "micro_loan_repayments",
+            {
+                "payment_status": "paid",
+                "payment_ref": receipt_number or repayment.get("payment_ref") or f"LN-{int(datetime.utcnow().timestamp())}",
+                "payment_error": None,
+                "verified_at": now_iso(),
+            },
+            filters={"id": f"eq.{repayment['id']}"},
+            single=True,
+        )
+    elif payment_status == "failed":
+        admin.update(
+            "micro_loan_repayments",
+            {"payment_status": "failed", "payment_error": result_desc},
+            filters={"id": f"eq.{repayment['id']}"},
+            single=True,
+        )
+        return
+    else:
+        admin.update(
+            "micro_loan_repayments",
+            {"payment_status": "pending_confirmation", "payment_error": None},
+            filters={"id": f"eq.{repayment['id']}"},
+            single=True,
+        )
+        return
+
+    loan, _ = admin.select("micro_loan_applications", filters={"id": f"eq.{repayment['loan_application_id']}"}, single=True)
+    if not loan:
+        return
+    repayments, _ = admin.select(
+        "micro_loan_repayments",
+        select="id, amount, payment_method, payment_status, payment_ref, phone_number, note, created_at, loan_application_id",
+        filters={"loan_application_id": f"eq.{loan['id']}"},
+        order="created_at.asc",
+    )
+    schedule = build_loan_schedule(
+        loan.get("approved_amount"),
+        loan.get("requested_amount"),
+        loan.get("interest_rate"),
+        loan.get("repayment_days"),
+        loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+        _paid_loan_repayments(repayments or []),
+    )
+    next_status = "repaid" if float(schedule["summary"]["remainingBalance"]) <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
+    admin.update(
+        "micro_loan_applications",
+        {
+            "status": next_status,
+            "repayment_status": "repaid" if next_status == "repaid" else "on_track",
+            "arrears_status": "repaid" if next_status == "repaid" else str(loan.get("arrears_status") or "current"),
+            "ledger_status": "closed" if next_status == "repaid" else str(loan.get("ledger_status") or "open"),
+            "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+            "repaid_at": now_iso() if next_status == "repaid" else None,
+            "updated_at": now_iso(),
+        },
+        filters={"id": f"eq.{loan['id']}"},
+        single=True,
+    )
+    try:
+        admin.insert(
+            "micro_loan_ledger_entries",
+            {
+                "loan_application_id": loan["id"],
+                "user_id": loan["user_id"],
+                "entry_type": "repayment",
+                "debit": 0,
+                "credit": float(repayment.get("amount") or 0),
+                "balance_after": float(schedule["summary"]["remainingBalance"]),
+                "reference": receipt_number or repayment.get("payment_ref"),
+                "note": "M-Pesa loan repayment confirmed from callback.",
+            },
+            single=True,
+        )
+    except Exception as exc:
+        logger.warning("Failed to write loan repayment ledger entry from callback: %s", exc)
+
+
 @api_view
 def payment_mpesa_callback(request: HttpRequest):
     if request.method != "POST":
@@ -2242,13 +2927,23 @@ def payment_mpesa_callback(request: HttpRequest):
                 str(subscription_payment.get("checkout_request_id") or checkout_request_id),
                 receipt_number,
             )
+        _sync_micro_loan_repayment_payment(admin, str(checkout_request_id), payment_status, resolved_desc, receipt_number)
     elif payment_status == "failed":
+        failed_order, _ = admin.select(
+            "orders",
+            select="id, product_id, quantity, status, payment_status",
+            filters={"checkout_request_id": f"eq.{checkout_request_id}"},
+            single=True,
+        )
         admin.update("orders", {"payment_status": "failed", "payment_error": resolved_desc}, filters={"checkout_request_id": f"eq.{checkout_request_id}"})
+        if failed_order:
+            _restock_failed_order(admin, failed_order)
         admin.update(
             "subscription_payments",
             {"payment_status": "failed", "payment_error": resolved_desc},
             filters={"checkout_request_id": f"eq.{checkout_request_id}"},
         )
+        _sync_micro_loan_repayment_payment(admin, str(checkout_request_id), payment_status, resolved_desc, receipt_number)
     else:
         admin.update("orders", {"payment_status": "pending_confirmation", "payment_error": None}, filters={"checkout_request_id": f"eq.{checkout_request_id}"})
         admin.update(
@@ -2256,4 +2951,77 @@ def payment_mpesa_callback(request: HttpRequest):
             {"payment_status": "pending_confirmation", "payment_error": None},
             filters={"checkout_request_id": f"eq.{checkout_request_id}"},
         )
+        _sync_micro_loan_repayment_payment(admin, str(checkout_request_id), payment_status, resolved_desc, receipt_number)
     return JsonResponse({"ok": True})
+
+
+@api_view
+@require_auth
+def order_refund_request(request: HttpRequest, order_id: str):
+    """Allows buyers to request a refund for paid orders that were cancelled."""
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    # Retrieve order
+    order, _ = request.supabase.select(
+        "orders",
+        filters={"id": f"eq.{order_id}", "buyer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not order:
+        raise ApiException("Order not found.", 404)
+    if order.get("status") != "cancelled" or order.get("payment_status") != "paid":
+        raise ApiException("Refund requests are available only for paid orders that have been cancelled.", 400)
+
+    # Check if a refund request already exists for this order
+    existing_refund, _ = request.supabase.select(
+        "refund_requests",
+        filters={"order_id": f"eq.{order_id}"},
+        single=True,
+    )
+    if existing_refund:
+        return JsonResponse(
+            {
+                "message": "Refund request already exists for this order.",
+                "refund": existing_refund,
+            }
+        )
+
+    body = parse_json_body(request)
+    reason = _clean_optional_text(body.get("reason"))
+    if not reason:
+        raise ApiException("Reason for refund is required.", 400)
+
+    financials = compute_order_financials(order)
+    amount = financials.get("escrow_amount", 0)
+    if amount <= 0:
+        raise ApiException("Order total amount is 0; no refund is due.", 400)
+
+    refund_data = {
+        "order_id": order_id,
+        "buyer_id": request.user_id,
+        "amount": amount,
+        "reason": reason,
+        "status": "pending",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+
+    created = admin_client().insert("refund_requests", refund_data, single=True)
+
+    # Write admin notification
+    write_user_notification(
+        admin_client(),
+        user_id=None,
+        title="New Refund Request",
+        message=f"Buyer requested KES {amount} refund for order #{order_id[:8]}. Reason: {reason}",
+        priority="high",
+        category="action",
+        entity_type="refund_request",
+        entity_id=created.get("id"),
+        action_url="/dashboard/admin/transactions",
+        source="user",
+        source_user_id=request.user_id,
+    )
+
+    return JsonResponse(created, status=201)

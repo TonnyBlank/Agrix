@@ -12,6 +12,7 @@ import {
   Download,
   Eye,
   HandCoins,
+  LoaderCircle,
   Lock,
   Search,
   RefreshCw,
@@ -31,7 +32,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useIdVerification } from "@/hooks/useIdVerification";
 import { useOrders } from "@/hooks/useOrders";
 import { apiFetch } from "@/lib/api";
-import { normalizeKenyanPhone as normalizeKenyanPhoneInput, sanitizeDecimalInput, sanitizePhoneInput } from "@/lib/inputSanitizers";
+import { isValidKenyanPhone, normalizeKenyanPhone as normalizeKenyanPhoneInput, sanitizeDecimalInput, sanitizePhoneInput } from "@/lib/inputSanitizers";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 
@@ -51,8 +52,13 @@ type LoanRepayment = {
   id: string;
   amount: number;
   payment_method: string | null;
+  payment_status?: "initiated" | "pending_confirmation" | "paid" | "failed" | null;
   payment_ref: string | null;
   phone_number: string | null;
+  checkout_request_id?: string | null;
+  merchant_request_id?: string | null;
+  payment_error?: string | null;
+  verified_at?: string | null;
   note: string | null;
   created_at: string;
 };
@@ -99,6 +105,52 @@ type CollateralItem = {
   notes?: string | null;
 };
 
+type LoanDocument = {
+  id: string;
+  document_type: string;
+  document_name: string;
+  document_url?: string | null;
+  status: "submitted" | "verified" | "rejected" | "waived";
+  reviewer_note?: string | null;
+  created_at: string;
+  reviewed_at?: string | null;
+};
+
+type VoucherRedemption = {
+  id: string;
+  voucher_code: string;
+  dealer_name: string;
+  dealer_location?: string | null;
+  redeemed_value: number;
+  status: "redeemed" | "cancelled";
+  note?: string | null;
+  redeemed_at: string;
+};
+
+type LedgerEntry = {
+  id: string;
+  entry_type: string;
+  debit: number;
+  credit: number;
+  balance_after: number;
+  reference?: string | null;
+  note?: string | null;
+  created_at: string;
+};
+
+type EligibilityExplanation = {
+  key?: string;
+  label: string;
+  met: boolean;
+  detail?: string;
+  points?: number;
+};
+
+type ArrearsStatus = "current" | "grace" | "overdue" | "default_risk" | "repaid";
+type RepaymentStatus = "not_started" | "on_track" | "due" | "late" | "repaid";
+type LoanDocumentStatus = "not_required" | "required" | "submitted" | "verified" | "rejected" | "waived";
+type VoucherStatus = "not_applicable" | "issued" | "redeemed" | "cancelled";
+
 type LoanApplication = {
   id: string;
   product_type?: string | null;
@@ -124,10 +176,28 @@ type LoanApplication = {
   disbursement_method?: "mpesa" | "voucher";
   repayment_method?: "mpesa" | "pay_with_produce";
   voucher_code?: string | null;
+  credit_score?: number;
+  credit_score_snapshot?: Record<string, unknown>;
+  eligibility_explanation?: EligibilityExplanation[];
+  due_date?: string | null;
+  grace_period_days?: number;
+  days_late?: number;
+  late_fee_amount?: number;
+  arrears_status?: ArrearsStatus;
+  next_payment_due_at?: string | null;
+  next_payment_amount?: number;
+  repayment_status?: RepaymentStatus;
+  document_status?: LoanDocumentStatus;
+  voucher_status?: VoucherStatus;
+  ledger_status?: "open" | "closed" | "written_off";
+  lender_reference?: string | null;
   created_at: string;
   disbursed_at?: string | null;
   repaid_at?: string | null;
   repayments: LoanRepayment[];
+  documents?: LoanDocument[];
+  voucher_redemptions?: VoucherRedemption[];
+  ledger_entries?: LedgerEntry[];
   loan_summary: LoanSummary;
   amortization_schedule: LoanScheduleRow[];
 };
@@ -347,14 +417,81 @@ function isLoanRepayable(application: LoanApplication) {
   return application.status === "disbursed";
 }
 
+function isPaidRepayment(repayment: LoanRepayment) {
+  return (repayment.payment_status ?? "paid") === "paid";
+}
+
+function normalizeEligibilityExplanation(value: unknown): EligibilityExplanation[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      key: typeof item.key === "string" ? item.key : undefined,
+      label: String(item.label ?? "").trim(),
+      met: Boolean(item.met),
+      detail: typeof item.detail === "string" ? item.detail : undefined,
+      points: typeof item.points === "number" ? item.points : undefined,
+    }))
+    .filter((item) => Boolean(item.label));
+}
+
+function normalizeLoanDocuments(value: unknown): LoanDocument[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      id: String(item.id ?? crypto.randomUUID()),
+      document_type: String(item.document_type ?? item.documentType ?? "document"),
+      document_name: String(item.document_name ?? item.documentName ?? "Document"),
+      document_url: typeof item.document_url === "string" ? item.document_url : null,
+      status: (["submitted", "verified", "rejected", "waived"].includes(String(item.status)) ? String(item.status) : "submitted") as LoanDocument["status"],
+      reviewer_note: typeof item.reviewer_note === "string" ? item.reviewer_note : null,
+      created_at: String(item.created_at ?? new Date().toISOString()),
+      reviewed_at: typeof item.reviewed_at === "string" ? item.reviewed_at : null,
+    }));
+}
+
+function normalizeVoucherRedemptions(value: unknown): VoucherRedemption[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      id: String(item.id ?? crypto.randomUUID()),
+      voucher_code: String(item.voucher_code ?? ""),
+      dealer_name: String(item.dealer_name ?? "Dealer"),
+      dealer_location: typeof item.dealer_location === "string" ? item.dealer_location : null,
+      redeemed_value: Number(item.redeemed_value ?? 0),
+      status: String(item.status) === "cancelled" ? "cancelled" : "redeemed",
+      note: typeof item.note === "string" ? item.note : null,
+      redeemed_at: String(item.redeemed_at ?? item.created_at ?? new Date().toISOString()),
+    }));
+}
+
+function normalizeLedgerEntries(value: unknown): LedgerEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+    .map((item) => ({
+      id: String(item.id ?? crypto.randomUUID()),
+      entry_type: String(item.entry_type ?? "adjustment"),
+      debit: Number(item.debit ?? 0),
+      credit: Number(item.credit ?? 0),
+      balance_after: Number(item.balance_after ?? 0),
+      reference: typeof item.reference === "string" ? item.reference : null,
+      note: typeof item.note === "string" ? item.note : null,
+      created_at: String(item.created_at ?? new Date().toISOString()),
+    }));
+}
+
 function enrichLoanApplication(loan: MicroLoanApplicationRow, repayments: LoanRepayment[]): LoanApplication {
+  const extendedLoan = loan as MicroLoanApplicationRow & Record<string, unknown>;
   const scheduleData = buildLoanSchedule({
     approvedAmount: loan.approved_amount,
     requestedAmount: loan.requested_amount,
     interestRate: loan.interest_rate,
     repaymentDays: loan.repayment_days,
     startDate: loan.disbursed_at ?? loan.reviewed_at ?? loan.created_at,
-    repayments,
+    repayments: repayments.filter(isPaidRepayment),
   });
 
   return {
@@ -378,36 +515,55 @@ function enrichLoanApplication(loan: MicroLoanApplicationRow, repayments: LoanRe
     disbursement_method: loan.disbursement_method as "mpesa" | "voucher" | undefined,
     repayment_method: loan.repayment_method as "mpesa" | "pay_with_produce" | undefined,
     voucher_code: loan.voucher_code as string | null | undefined,
+    credit_score: Number(extendedLoan.credit_score ?? 0),
+    credit_score_snapshot: typeof extendedLoan.credit_score_snapshot === "object" && extendedLoan.credit_score_snapshot !== null ? extendedLoan.credit_score_snapshot as Record<string, unknown> : {},
+    eligibility_explanation: normalizeEligibilityExplanation(extendedLoan.eligibility_explanation),
+    due_date: typeof extendedLoan.due_date === "string" ? extendedLoan.due_date : null,
+    grace_period_days: Number(extendedLoan.grace_period_days ?? 7),
+    days_late: Number(extendedLoan.days_late ?? 0),
+    late_fee_amount: Number(extendedLoan.late_fee_amount ?? 0),
+    arrears_status: (extendedLoan.arrears_status as ArrearsStatus | undefined) ?? "current",
+    next_payment_due_at: typeof extendedLoan.next_payment_due_at === "string" ? extendedLoan.next_payment_due_at : null,
+    next_payment_amount: Number(extendedLoan.next_payment_amount ?? 0),
+    repayment_status: (extendedLoan.repayment_status as RepaymentStatus | undefined) ?? (loan.status === "repaid" ? "repaid" : loan.status === "disbursed" ? "on_track" : "not_started"),
+    document_status: (extendedLoan.document_status as LoanDocumentStatus | undefined) ?? (loan.requires_branch_visit ? "required" : "not_required"),
+    voucher_status: (extendedLoan.voucher_status as VoucherStatus | undefined) ?? (loan.voucher_code ? "issued" : "not_applicable"),
+    ledger_status: (extendedLoan.ledger_status as "open" | "closed" | "written_off" | undefined) ?? (loan.status === "repaid" ? "closed" : "open"),
+    lender_reference: typeof extendedLoan.lender_reference === "string" ? extendedLoan.lender_reference : null,
     repayments,
+    documents: normalizeLoanDocuments(extendedLoan.documents),
+    voucher_redemptions: normalizeVoucherRedemptions(extendedLoan.voucher_redemptions),
+    ledger_entries: normalizeLedgerEntries(extendedLoan.ledger_entries),
     loan_summary: scheduleData.summary,
     amortization_schedule: scheduleData.schedule,
   };
 }
 
 async function loadLoanApplicationsFromSupabase(userId: string) {
-  let { data: _loans, error: loansError } = await supabase
+  const initialResult = await supabase
     .from("micro_loan_applications")
     .select("*")
-    // @ts-expect-error DB types inference too deep for foreign relation eq mapping
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
+
+  let rawLoans = (initialResult.data ?? []) as unknown[];
+  let loansError = initialResult.error;
 
   if (loansError?.code === "PGRST204" && loansError.message.includes("disbursement_method")) {
     const fallbackResult = await supabase
       .from("micro_loan_applications")
       .select(SAFE_MICRO_LOAN_APPLICATION_SELECT)
-      // @ts-expect-error DB types inference too deep for foreign relation eq mapping
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
-    _loans = fallbackResult.data;
+    rawLoans = (fallbackResult.data ?? []) as unknown[];
     loansError = fallbackResult.error;
   }
 
   if (loansError) throw loansError;
-  const loans = ((_loans ?? []) as unknown[]).map((loan) => ({
+  const loans = rawLoans.map((loan) => ({
     disbursement_method: "mpesa",
     voucher_code: null,
-    ...loan,
+    ...(loan as Record<string, unknown>),
   })) as MicroLoanApplicationRow[];
 
   const loanIds = (loans ?? []).map((loan) => loan.id);
@@ -415,7 +571,6 @@ async function loadLoanApplicationsFromSupabase(userId: string) {
     ? await supabase
         .from("micro_loan_repayments")
         .select("*")
-        // @ts-expect-error DB types inference too deep for relation mapping
         .in("loan_application_id", loanIds)
         .order("created_at", { ascending: true })
     : { data: [], error: null };
@@ -430,8 +585,13 @@ async function loadLoanApplicationsFromSupabase(userId: string) {
       id: repayment.id,
       amount: Number(repayment.amount ?? 0),
       payment_method: repayment.payment_method ?? null,
+      payment_status: (repayment as MicroLoanRepaymentRow & Record<string, unknown>).payment_status as LoanRepayment["payment_status"] ?? "paid",
       payment_ref: repayment.payment_ref ?? null,
       phone_number: repayment.phone_number ?? null,
+      checkout_request_id: (repayment as MicroLoanRepaymentRow & Record<string, unknown>).checkout_request_id as string | null | undefined,
+      merchant_request_id: (repayment as MicroLoanRepaymentRow & Record<string, unknown>).merchant_request_id as string | null | undefined,
+      payment_error: (repayment as MicroLoanRepaymentRow & Record<string, unknown>).payment_error as string | null | undefined,
+      verified_at: (repayment as MicroLoanRepaymentRow & Record<string, unknown>).verified_at as string | null | undefined,
       note: repayment.note ?? null,
       created_at: repayment.created_at,
     });
@@ -447,9 +607,7 @@ async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: n
   const { data: _data, error } = await supabase
     .from("micro_loan_offers")
     .select("*")
-    // @ts-expect-error DB types inference too deep for relation mapping
     .eq("is_active", true)
-    // @ts-expect-error DB types inference too deep for relation mapping
     .eq("applicant_role", role)
     .order("created_at", { ascending: false });
   const data = _data as unknown as MicroLoanOfferRow[];
@@ -727,6 +885,26 @@ function MicroLoansDashboard() {
   const [repaymentDialogLoan, setRepaymentDialogLoan] = useState<LoanApplication | null>(null);
   const [repaymentAmount, setRepaymentAmount] = useState("");
   const [repaymentPhone, setRepaymentPhone] = useState("");
+
+  const isRepaymentPhoneValid = useMemo(() => {
+    if (!repaymentDialogLoan || repaymentDialogLoan.repayment_method === "pay_with_produce") {
+      return true;
+    }
+    return isValidKenyanPhone(repaymentPhone);
+  }, [repaymentPhone, repaymentDialogLoan]);
+
+  const isConfirmDisabled = useMemo(() => {
+    if (repayingLoanId === repaymentDialogLoan?.id) return true;
+
+    const amount = Number(repaymentAmount.replace(/[^\d.]/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) return true;
+
+    if (repaymentDialogLoan?.repayment_method !== "pay_with_produce") {
+      return !repaymentPhone.trim() || !isRepaymentPhoneValid;
+    }
+
+    return false;
+  }, [repayingLoanId, repaymentDialogLoan, repaymentAmount, repaymentPhone, isRepaymentPhoneValid]);
   const [selectedLoanReceipt, setSelectedLoanReceipt] = useState<LoanApplication | null>(null);
   const [currentLoanStep, setCurrentLoanStep] = useState(1);
   const [loanSidebarView, setLoanSidebarView] = useState<"active" | "closed">("active");
@@ -1116,7 +1294,7 @@ function MicroLoansDashboard() {
     }
 
     if (paymentMethod === "mpesa" && !repaymentPhone.trim()) {
-      toast.error("Enter the M-Pesa number to receive the STK prompt.");
+      toast.error("Enter the M-Pesa number for this repayment record.");
       return;
     }
 
@@ -1124,11 +1302,11 @@ function MicroLoansDashboard() {
     try {
       const response = await apiFetch<{ message: string; loan: LoanApplication }>(`/micro-loans/applications/${repaymentDialogLoan.id}/repay`, {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           amount,
           paymentMethod,
           phoneNumber: paymentMethod === "mpesa" ? repaymentPhone : null,
-        }) as unknown as BodyInit,
+        } as unknown as BodyInit,
       });
       setApplications((current) => current.map((item) => (item.id === repaymentDialogLoan.id ? response.loan : item)));
       setSelectedLoanReceipt((current) => (current?.id === repaymentDialogLoan.id ? response.loan : current));
@@ -1209,7 +1387,6 @@ function MicroLoansDashboard() {
               updated_at: new Date().toISOString(),
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             } as unknown as any)
-            // @ts-expect-error DB types inference too deep for relation mapping
             .eq("id", repaymentDialogLoan.id)
             .select("*")
             .single();
@@ -1990,7 +2167,7 @@ function MicroLoansDashboard() {
                   <div className="flex flex-wrap gap-2">
                   {isLoanRepayable(selectedLoanReceipt) ? (
                     <Button type="button" className="rounded-xl" onClick={() => { setSelectedLoanReceipt(null); openRepaymentDialog(selectedLoanReceipt); }}>
-                      Pay with M-Pesa
+                      {selectedLoanReceipt.repayment_method === "pay_with_produce" ? "Post Produce Repayment" : "Record M-Pesa Payment"}
                     </Button>
                   ) : null}
                   <Button type="button" variant="outline" className="rounded-xl" onClick={() => downloadLoanReceipt(selectedLoanReceipt)}>
@@ -2169,7 +2346,7 @@ function MicroLoansDashboard() {
                       </div>
                     )) : (
                       <div className="rounded-[1rem] border border-dashed border-border bg-background/60 px-4 py-3 text-sm text-muted-foreground">
-                        No repayments posted yet. Use the Pay with M-Pesa button to record the next payment.
+                        No repayments posted yet. Use the repayment button to record the next payment.
                       </div>
                     )}
                   </div>
@@ -2183,13 +2360,19 @@ function MicroLoansDashboard() {
       <Dialog open={Boolean(repaymentDialogLoan)} onOpenChange={(open) => !open && setRepaymentDialogLoan(null)}>
         <DialogContent className="rounded-[2rem] sm:max-w-lg">
           <DialogHeader>
+            {repaymentDialogLoan?.repayment_method !== "pay_with_produce" && (
+              <div className="mb-2 flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 w-fit">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                M-Pesa Repayment Record
+              </div>
+            )}
             <DialogTitle className="font-display text-2xl">
-              {repaymentDialogLoan?.repayment_method === "pay_with_produce" ? "Post Pay-with-Produce Repayment" : "Repay Loan via M-Pesa"}
+              {repaymentDialogLoan?.repayment_method === "pay_with_produce" ? "Post Pay-with-Produce Repayment" : "Record M-Pesa Repayment"}
             </DialogTitle>
             <DialogDescription>
               {repaymentDialogLoan?.repayment_method === "pay_with_produce"
                 ? "Enter the amount to allocate against this loan from produce-settlement proceeds."
-                : "Enter the amount and the phone number that should receive the STK push prompt on the SIM card."}
+                : "Enter the amount and the M-Pesa number used for this repayment record."}
             </DialogDescription>
           </DialogHeader>
 
@@ -2229,8 +2412,15 @@ function MicroLoansDashboard() {
                   value={repaymentPhone}
                   onChange={(event) => setRepaymentPhone(sanitizePhoneInput(event.target.value))}
                   placeholder="07XXXXXXXX"
-                  className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm text-foreground"
+                  className={`h-11 w-full rounded-xl border bg-background px-3 text-sm text-foreground transition-colors ${
+                    repaymentPhone && !isRepaymentPhoneValid ? "border-red-500 focus-visible:ring-red-500" : "border-border"
+                  }`}
                 />
+                {repaymentPhone && !isRepaymentPhoneValid && (
+                  <p className="text-xs font-medium text-red-500">
+                    Please enter a valid Kenyan phone number (e.g. 07XXXXXXXX or 254XXXXXXXX).
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -2239,14 +2429,24 @@ function MicroLoansDashboard() {
             <Button type="button" variant="outline" className="rounded-xl" onClick={() => setRepaymentDialogLoan(null)}>
               Cancel
             </Button>
-            <Button type="button" className="rounded-xl" disabled={repayingLoanId === repaymentDialogLoan?.id} onClick={() => void handleRepayment()}>
-              {repayingLoanId === repaymentDialogLoan?.id
-                ? repaymentDialogLoan?.repayment_method === "pay_with_produce"
-                  ? "Posting repayment..."
-                  : "Sending prompt..."
-                : repaymentDialogLoan?.repayment_method === "pay_with_produce"
+            <Button
+              type="button"
+              className="rounded-xl"
+              disabled={isConfirmDisabled}
+              onClick={() => void handleRepayment()}
+            >
+              {repayingLoanId === repaymentDialogLoan?.id ? (
+                <span className="flex items-center gap-1.5 justify-center">
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                  {repaymentDialogLoan?.repayment_method === "pay_with_produce"
+                    ? "Posting..."
+                    : "Recording..."}
+                </span>
+              ) : (
+                repaymentDialogLoan?.repayment_method === "pay_with_produce"
                   ? "Post Repayment"
-                  : "Send M-Pesa Prompt"}
+                  : "Record M-Pesa Payment"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2338,7 +2538,7 @@ function MicroLoansDashboard() {
                 {repaymentMethod === "pay_with_produce" 
                   ? "Your outstanding loan balance will be automatically deducted from your future verified marketplace sales." 
                   : canUseProduceRepayment
-                    ? "You will manually initiate repayments via M-Pesa push prompts."
+                    ? "Record confirmed M-Pesa repayments here once the borrower has paid."
                     : "This loan currently repays through M-Pesa only."}
               </p>
             </div>

@@ -34,6 +34,22 @@ const statusColors: Record<string, string> = {
   cancelled: "bg-destructive/15 text-destructive border-destructive/20",
 };
 
+const paymentStatusLabels: Record<string, string> = {
+  unpaid: "Unpaid",
+  initiated: "Prompt Sent",
+  pending_confirmation: "Awaiting M-Pesa",
+  paid: "Paid",
+  failed: "Payment Failed",
+};
+
+const paymentStatusColors: Record<string, string> = {
+  unpaid: "",
+  initiated: "bg-sky-500/10 text-sky-600 border-sky-500/20",
+  pending_confirmation: "bg-amber-500/10 text-amber-600 border-amber-500/20",
+  paid: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
+  failed: "bg-destructive/10 text-destructive border-destructive/20",
+};
+
 const exportRanges = [
   { label: "1 day", days: 1 },
   { label: "1 week", days: 7 },
@@ -420,7 +436,21 @@ function ReceiptDialog({ order, onOpenChange }: { order: Order | null; onOpenCha
   );
 }
 
-function OrderActions({ order, view, busy, onChangeStatus }: { order: Order; view: "selling" | "buying"; busy: boolean; onChangeStatus: (status: OrderStatus) => void; }) {
+function OrderActions({
+  order,
+  view,
+  busy,
+  onChangeStatus,
+  onCancelOrder,
+  onRequestRefund,
+}: {
+  order: Order;
+  view: "selling" | "buying";
+  busy: boolean;
+  onChangeStatus: (status: OrderStatus) => void;
+  onCancelOrder: () => void;
+  onRequestRefund: () => void;
+}) {
   const isPaid = order.payment_status === "paid";
   if (view === "selling") {
     if (!isPaid && ["pending", "confirmed", "processing"].includes(order.status)) {
@@ -435,13 +465,28 @@ function OrderActions({ order, view, busy, onChangeStatus }: { order: Order; vie
     if (order.status === "processing") return <><Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" disabled={busy} onClick={() => onChangeStatus("shipped")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <Truck className="mr-1 h-3 w-3" />} Ship</Button><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}><X className="mr-1 h-3 w-3" /> Cancel</Button></>;
   }
   if (view === "buying") {
-    if (order.status === "pending") return <Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={() => onChangeStatus("cancelled")}>{busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />} Cancel</Button>;
+    const showCancel = order.status !== "cancelled" && order.status !== "shipped" && order.status !== "delivered" && order.payment_status !== "paid";
+    const showRefund = order.status === "cancelled" && order.payment_status === "paid";
+    return (
+      <div className="flex gap-2">
+        {showCancel && (
+          <Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs text-destructive" disabled={busy} onClick={onCancelOrder}>
+            {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />} Cancel Order
+          </Button>
+        )}
+        {showRefund && (
+          <Button size="sm" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs bg-amber-600 hover:bg-amber-700 text-white" disabled={busy} onClick={onRequestRefund}>
+            Request Refund
+          </Button>
+        )}
+      </div>
+    );
   }
   return null;
 }
 
 function ReceiptActions({ order, onView }: { order: Order; onView: (order: Order) => void }) {
-  if (!order.paid_at) return null;
+  if (order.payment_status !== "paid") return null;
   return <><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" onClick={() => onView(order)}><Eye className="mr-1 h-3 w-3" /> View Receipt</Button><Button size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs" onClick={() => downloadReceipt(order)}><Download className="mr-1 h-3 w-3" /> Download</Button></>;
 }
 
@@ -491,6 +536,8 @@ function OrdersDesktopTable(props: {
   busyOrderId: string | null;
   verificationCountdownByOrder: Record<string, number>;
   onChangeStatus: (orderId: string, status: OrderStatus) => void;
+  onCancelOrder: (orderId: string) => void;
+  onRequestRefund: (order: Order) => void;
   onOpenPayment: (order: Order) => void;
   onRefreshPayment: (orderId: string) => void;
   onViewReceipt: (order: Order) => void;
@@ -502,6 +549,8 @@ function OrdersDesktopTable(props: {
     busyOrderId,
     verificationCountdownByOrder,
     onChangeStatus,
+    onCancelOrder,
+    onRequestRefund,
     onOpenPayment,
     onRefreshPayment,
     onViewReceipt,
@@ -536,7 +585,8 @@ function OrdersDesktopTable(props: {
                   : order.status === "delivered"
                     ? "Delivered"
                     : "Awaiting shipment";
-            const paidLabel = order.paid_at ? "Paid" : order.payment_status;
+            const paidLabel = paymentStatusLabels[order.payment_status] ?? order.payment_status;
+            const paidBadgeClass = paymentStatusColors[order.payment_status] ?? "";
             const busy = busyOrderId === order.id;
             const verifyCountdown = verificationCountdownByOrder[order.id] ?? 0;
 
@@ -545,7 +595,7 @@ function OrdersDesktopTable(props: {
                 <td className="px-4 py-3.5 font-semibold text-foreground">{startIndex + index + 1}</td>
                 <td className="px-4 py-3.5">
                   <div className="flex min-w-0 items-start gap-3">
-                    <ProductThumb
+                     <ProductThumb
                       order={order}
                       className="h-9 w-9 shrink-0 rounded-[0.8rem] border border-border/60 object-cover"
                     />
@@ -568,7 +618,7 @@ function OrdersDesktopTable(props: {
                 <td className="px-4 py-3.5">
                   <div className="flex max-w-[170px] flex-wrap gap-1.5">
                     <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[order.status] || ""}`}>{order.status}</Badge>
-                    <Badge variant="outline" className="rounded-full text-[10px]">{paidLabel}</Badge>
+                    <Badge variant="outline" className={`rounded-full text-[10px] ${paidBadgeClass}`}>{paidLabel}</Badge>
                     <Badge variant="outline" className="rounded-full text-[10px]">{shippingState}</Badge>
                   </div>
                 </td>
@@ -579,7 +629,14 @@ function OrdersDesktopTable(props: {
                         <MessageCircle className="mr-1 h-3 w-3" /> {view === "selling" ? "Buyer" : "Seller"}
                       </Link>
                     </Button>
-                    <OrderActions order={order} view={view} busy={busy} onChangeStatus={(status) => onChangeStatus(order.id, status)} />
+                    <OrderActions
+                      order={order}
+                      view={view}
+                      busy={busy}
+                      onChangeStatus={(status) => onChangeStatus(order.id, status)}
+                      onCancelOrder={() => onCancelOrder(order.id)}
+                      onRequestRefund={() => onRequestRefund(order)}
+                    />
                     <ReceiptActions order={order} onView={onViewReceipt} />
                   </div>
                   {view === "buying" && order.payment_status !== "paid" && order.status !== "cancelled" && (
@@ -605,7 +662,11 @@ function OrdersDesktopTable(props: {
                       M-Pesa prompt sent. Automatic verification starts in {verifyCountdown}s.
                     </p>
                   ) : null}
-                  {order.payment_error && <p className="mt-2 text-right text-xs text-destructive">{order.payment_error}</p>}
+                  {order.payment_error ? (
+                    <div className="mt-2 rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-right">
+                      <p className="text-xs font-medium text-destructive">{order.payment_error}</p>
+                    </div>
+                  ) : null}
                 </td>
               </tr>
             );
@@ -725,6 +786,8 @@ function OrderCard(props: {
   view: "selling" | "buying";
   busy: boolean;
   onChangeStatus: (status: OrderStatus) => void;
+  onCancelOrder: (orderId: string) => void;
+  onRequestRefund: (order: Order) => void;
   onOpenPayment: () => void;
   onRefreshPayment: () => void;
   onViewReceipt: (order: Order) => void;
@@ -734,6 +797,8 @@ function OrderCard(props: {
     view,
     busy,
     onChangeStatus,
+    onCancelOrder,
+    onRequestRefund,
     onOpenPayment,
     onRefreshPayment,
     onViewReceipt,
@@ -750,7 +815,8 @@ function OrderCard(props: {
         : order.status === "delivered"
           ? "Delivered"
         : "Awaiting shipment";
-  const paidLabel = order.paid_at ? "Paid" : order.payment_status;
+  const paidLabel = paymentStatusLabels[order.payment_status] ?? order.payment_status;
+  const paidBadgeClass = paymentStatusColors[order.payment_status] ?? "";
   const createdDate = formatTransactionDateTime(order.created_at);
   const transactionReference = getTransactionReference(order);
 
@@ -798,7 +864,7 @@ function OrderCard(props: {
             <Badge variant="outline" className={`rounded-full text-[10px] ${statusColors[order.status] || ""}`}>
               {order.status}
             </Badge>
-            <Badge variant="outline" className="rounded-full text-[10px]">{paidLabel}</Badge>
+            <Badge variant="outline" className={`rounded-full text-[10px] ${paidBadgeClass}`}>{paidLabel}</Badge>
             <Badge variant="outline" className="rounded-full text-[10px]">{shippingState}</Badge>
           </div>
 
@@ -808,7 +874,14 @@ function OrderCard(props: {
                 <MessageCircle className="mr-1 h-3 w-3" /> {view === "selling" ? "Buyer" : "Seller"}
               </Link>
             </Button>
-            <OrderActions order={order} view={view} busy={busy} onChangeStatus={onChangeStatus} />
+            <OrderActions
+              order={order}
+              view={view}
+              busy={busy}
+              onChangeStatus={onChangeStatus}
+              onCancelOrder={() => onCancelOrder(order.id)}
+              onRequestRefund={() => onRequestRefund(order)}
+            />
             <ReceiptActions order={order} onView={onViewReceipt} />
           </div>
         </div>
@@ -848,7 +921,14 @@ function OrderCard(props: {
             </Link>
           </Button>
           <ReceiptActions order={order} onView={onViewReceipt} />
-          <OrderActions order={order} view={view} busy={busy} onChangeStatus={onChangeStatus} />
+          <OrderActions
+            order={order}
+            view={view}
+            busy={busy}
+            onChangeStatus={onChangeStatus}
+            onCancelOrder={() => onCancelOrder(order.id)}
+            onRequestRefund={() => onRequestRefund(order)}
+          />
         </div>
       </div>
 
@@ -864,13 +944,27 @@ function OrderCard(props: {
         </div>
       )}
 
-      {order.payment_error && <p className="mt-2 text-xs text-destructive">{order.payment_error}</p>}
+      {order.payment_error ? (
+        <div className="mt-2 rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2">
+          <p className="text-xs font-medium text-destructive">{order.payment_error}</p>
+        </div>
+      ) : null}
     </motion.div>
   );
 }
 
 export default function Orders() {
-  const { sellingOrders, buyingOrders, loading, updateOrderStatus, initiateMpesaPayment, refreshMpesaPaymentStatus } = useOrders();
+  const {
+    sellingOrders,
+    buyingOrders,
+    loading,
+    updateOrderStatus,
+    initiateMpesaPayment,
+    refreshMpesaPaymentStatus,
+    cancelOrder,
+    requestRefund,
+    refetch,
+  } = useOrders();
   const { profile } = useAuth();
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [verificationCountdownByOrder, setVerificationCountdownByOrder] = useState<Record<string, number>>({});
@@ -883,8 +977,41 @@ export default function Orders() {
   const [sellingPage, setSellingPage] = useState(1);
   const [buyingPage, setBuyingPage] = useState(1);
   const [shippingPage, setShippingPage] = useState(1);
+
+  // Advanced filters state
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterPaymentStatus, setFilterPaymentStatus] = useState("all");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
+
+  // Refund dialog state
+  const [refundDialogOrder, setRefundDialogOrder] = useState<Order | null>(null);
+  const [refundReason, setRefundReason] = useState("");
+  const [refundSubmitting, setRefundSubmitting] = useState(false);
+
   const paymentVerificationIntervalsRef = useRef<Record<string, number>>({});
   const paymentVerificationTimeoutsRef = useRef<Record<string, number>>({});
+
+  const applyFilters = () => {
+    const filtersObj = {
+      status: filterStatus === "all" ? undefined : filterStatus,
+      payment_status: filterPaymentStatus === "all" ? undefined : filterPaymentStatus,
+      search: filterSearch.trim() || undefined,
+      from: filterFromDate || undefined,
+      to: filterToDate || undefined,
+    };
+    void refetch(true, filtersObj);
+  };
+
+  const resetFilters = () => {
+    setFilterStatus("all");
+    setFilterPaymentStatus("all");
+    setFilterSearch("");
+    setFilterFromDate("");
+    setFilterToDate("");
+    void refetch(true);
+  };
 
   const clearPaymentVerificationWindow = (orderId: string) => {
     const activeInterval = paymentVerificationIntervalsRef.current[orderId];
@@ -1063,6 +1190,23 @@ export default function Orders() {
     setBusyOrderId(orderId);
     await updateOrderStatus(orderId, status);
     setBusyOrderId(null);
+  };
+
+  const handleCancelOrder = async (orderId: string) => {
+    setBusyOrderId(orderId);
+    await cancelOrder(orderId);
+    setBusyOrderId(null);
+  };
+
+  const handleRequestRefundSubmit = async () => {
+    if (!refundDialogOrder || !refundReason.trim()) return;
+    setRefundSubmitting(true);
+    const success = await requestRefund(refundDialogOrder.id, refundReason);
+    setRefundSubmitting(false);
+    if (success) {
+      setRefundDialogOrder(null);
+      setRefundReason("");
+    }
   };
 
   const handleRefreshPayment = async (orderId: string) => {
@@ -1293,18 +1437,106 @@ export default function Orders() {
           </TabsList>
 
           <div className="mt-4 rounded-[1.1rem] border border-border/70 bg-white/90 p-4 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Advanced Order Filters</p>
+                <p className="text-xs text-muted-foreground">
+                  Query the marketplace database by status, payment state, keywords, or creation date range.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Search Text</label>
+                  <Input
+                    value={filterSearch}
+                    onChange={(e) => setFilterSearch(e.target.value)}
+                    placeholder="Product name, note, etc."
+                    className="mt-1 h-9 rounded-xl text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Order Status</label>
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="mt-1 flex h-9 w-full rounded-xl border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="all">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="processing">Processing</option>
+                    <option value="shipped">Shipped</option>
+                    <option value="delivered">Delivered</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Payment Status</label>
+                  <select
+                    value={filterPaymentStatus}
+                    onChange={(e) => setFilterPaymentStatus(e.target.value)}
+                    className="mt-1 flex h-9 w-full rounded-xl border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="all">All Payments</option>
+                    <option value="unpaid">Unpaid</option>
+                    <option value="initiated">Prompt Sent</option>
+                    <option value="pending_confirmation">Awaiting M-Pesa</option>
+                    <option value="paid">Paid</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">From Date</label>
+                  <Input
+                    type="date"
+                    value={filterFromDate}
+                    onChange={(e) => setFilterFromDate(e.target.value)}
+                    className="mt-1 h-9 rounded-xl text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">To Date</label>
+                  <Input
+                    type="date"
+                    value={filterToDate}
+                    onChange={(e) => setFilterToDate(e.target.value)}
+                    className="mt-1 h-9 rounded-xl text-xs"
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 rounded-xl text-xs"
+                  onClick={resetFilters}
+                >
+                  Reset
+                </Button>
+                <Button
+                  type="button"
+                  className="h-9 rounded-xl text-xs"
+                  onClick={applyFilters}
+                >
+                  Apply Filters
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-[1.1rem] border border-border/70 bg-white/90 p-4 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.18)] dark:bg-card/90">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-sm font-semibold text-foreground">Search by transaction ID</p>
+                <p className="text-sm font-semibold text-foreground">Local Table Search</p>
                 <p className="text-xs text-muted-foreground">
-                  Find an order using receipt number, checkout request ID, merchant request ID, or order ID.
+                  Quickly filter loaded orders in this view using transaction ID, receipt reference, or order ID.
                 </p>
               </div>
               <div className="w-full sm:max-w-md">
                 <Input
                   value={transactionSearch}
                   onChange={(event) => setTransactionSearch(event.target.value)}
-                  placeholder="Enter transaction ID"
+                  placeholder="Enter transaction reference..."
                   className="h-10 rounded-xl"
                 />
               </div>
@@ -1333,6 +1565,8 @@ export default function Orders() {
                     busyOrderId={busyOrderId}
                     verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
+                    onCancelOrder={handleCancelOrder}
+                    onRequestRefund={setRefundDialogOrder}
                     onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
@@ -1384,6 +1618,8 @@ export default function Orders() {
                     busyOrderId={busyOrderId}
                     verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
+                    onCancelOrder={handleCancelOrder}
+                    onRequestRefund={setRefundDialogOrder}
                     onOpenPayment={setPaymentDialogOrder}
                     onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
@@ -1441,6 +1677,34 @@ export default function Orders() {
         busy={Boolean(paymentDialogOrder && busyOrderId === paymentDialogOrder.id)}
         errorMessage={paymentDialogOrder?.payment_error || null}
       />
+
+      <Dialog open={Boolean(refundDialogOrder)} onOpenChange={(open) => !open && setRefundDialogOrder(null)}>
+        <DialogContent className="rounded-[1.4rem]">
+          <DialogHeader>
+            <DialogTitle>Request Refund</DialogTitle>
+            <DialogDescription>
+              Submit a request for refunding order #{refundDialogOrder?.id.slice(0, 8)}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Reason for refund</label>
+              <textarea
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+                placeholder="Explain why you are requesting a refund..."
+                className="mt-1 w-full min-h-[80px] rounded-xl border border-border bg-background p-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" className="rounded-xl" onClick={() => setRefundDialogOrder(null)}>Cancel</Button>
+              <Button className="rounded-xl bg-amber-600 hover:bg-amber-700 text-white" disabled={refundSubmitting || !refundReason.trim()} onClick={handleRequestRefundSubmit}>
+                {refundSubmitting ? "Submitting..." : "Submit Request"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </DashboardShell>
   );
 }

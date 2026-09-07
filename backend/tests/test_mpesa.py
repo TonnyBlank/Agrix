@@ -1,8 +1,9 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
+from api.views_core import _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -46,6 +47,25 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(status, "pending_confirmation")
         self.assertEqual(result_code, "")
         self.assertEqual(result_desc, "The service request is being processed")
+
+    def test_failed_payment_restock_is_idempotent(self):
+        client = Mock()
+        order = {"product_id": "product-1", "quantity": 2, "status": "pending", "payment_status": "failed"}
+
+        _restock_failed_order(client, order)
+
+        client.rpc.assert_not_called()
+
+    def test_unresolved_payment_restock_uses_atomic_rpc(self):
+        client = Mock()
+        order = {"product_id": "product-1", "quantity": 2, "status": "pending", "payment_status": "initiated"}
+
+        _restock_failed_order(client, order)
+
+        client.rpc.assert_called_once_with(
+            "increment_product_stock",
+            {"p_product_id": "product-1", "p_quantity": 2.0},
+        )
 
 
 if __name__ == "__main__":

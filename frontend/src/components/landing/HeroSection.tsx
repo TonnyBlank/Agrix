@@ -25,8 +25,8 @@ export default function HeroSection() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7 }}
           >
-            <span className="mb-4 inline-flex items-center gap-3 font-display text-2xl font-black tracking-tight text-black dark:text-white md:text-3xl">
-              <span className="h-3 w-3 rounded-full bg-agri-gold-500 shadow-[0_0_16px_rgba(234,179,8,0.95)] animate-pulse" />
+            <span className="mb-4 inline-flex items-center gap-3 font-display text-2xl font-black tracking-tight text-primary-foreground md:text-3xl">
+              <span className="h-3 w-3 rounded-full bg-gold-500 shadow-[0_0_16px_rgba(234,179,8,0.95)] animate-pulse" />
               Revolutionizing Kenyan Agriculture
             </span>
           </motion.div>
@@ -48,7 +48,7 @@ export default function HeroSection() {
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, delay: 0.2 }}
-            className="text-lg md:text-xl text-agri-green-200/80 max-w-2xl mb-10 leading-relaxed"
+            className="text-lg md:text-xl text-primary-foreground/85 max-w-2xl mb-10 leading-relaxed"
           >
             AgriLink X is an integrated agricultural ecosystem connecting farmers, buyers, and agri-companies in a unified digital marketplace. We deliver flexible micro-financing, advanced farm management, and seamless B2B networking to ensure secure transactions, reliable sourcing, and scalable profitability.
           </motion.p>
@@ -88,7 +88,7 @@ export default function HeroSection() {
                 <div className="text-2xl md:text-3xl font-display font-bold text-primary-foreground">
                   {stat.value}
                 </div>
-                <div className="text-sm text-agri-green-200/60">{stat.label}</div>
+                <div className="text-sm text-primary-foreground/70">{stat.label}</div>
               </div>
             ))}
           </motion.div>

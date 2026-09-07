@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from django.urls import path
 
-from api import views_admin, views_core, views_loans, views_social, views_companies
+from api import views_admin, views_core, views_loans, views_social, views_companies, views_logistics, views_channels, views_risk
 
 from .bridge import legacy_view
 
 urlpatterns = [
     path("health", legacy_view(views_core.health)),
+    path("api/sms/inbound", legacy_view(views_channels.sms_inbound)),
+    path("api/ussd", legacy_view(views_channels.ussd_gateway)),
     path("api/scanner/crops", legacy_view(views_core.scanner_crops)),
     path("api/products", legacy_view(views_core.products_root)),
     path("api/products/mine", legacy_view(views_core.products_mine)),
@@ -20,10 +22,16 @@ urlpatterns = [
     path("api/orders/selling", legacy_view(views_core.orders_selling)),
     path("api/orders/buying", legacy_view(views_core.orders_buying)),
     path("api/orders/<str:order_id>/status", legacy_view(views_core.order_status)),
+    path("api/orders/<str:order_id>/cancel", legacy_view(views_core.order_cancel)),
+    path("api/orders/<str:order_id>/refund-request", legacy_view(views_core.order_refund_request)),
     path("api/orders/<str:order_id>/delivery-proof", legacy_view(views_core.order_delivery_proof)),
     path("api/orders/<str:order_id>/delivery-otp/request", legacy_view(views_core.order_delivery_otp_request)),
     path("api/orders/<str:order_id>/delivery-otp/verify", legacy_view(views_core.order_delivery_otp_verify)),
     path("api/orders/<str:order_id>/dispute", legacy_view(views_core.order_raise_dispute)),
+    path("api/logistics/shipments", legacy_view(views_logistics.logistics_shipments)),
+    path("api/logistics/shipments/<str:dispatch_id>/accept", legacy_view(views_logistics.logistics_shipment_accept)),
+    path("api/logistics/shipments/<str:dispatch_id>/status", legacy_view(views_logistics.logistics_shipment_status)),
+    path("api/logistics/shipments/<str:dispatch_id>/handover", legacy_view(views_logistics.logistics_shipment_handover)),
     path("api/cart", legacy_view(views_core.cart_root)),
     path("api/cart/<str:item_id>", legacy_view(views_core.cart_item_detail)),
     path("api/payments/orders/<str:order_id>/mpesa", legacy_view(views_core.payment_mpesa)),
@@ -70,6 +78,12 @@ urlpatterns = [
     path("api/micro-loans/offers", legacy_view(views_loans.micro_loan_offers)),
     path("api/micro-loans/applications", legacy_view(views_loans.micro_loan_applications)),
     path("api/micro-loans/applications/<str:loan_id>/repay", legacy_view(views_loans.micro_loan_repay)),
+    path("api/micro-loans/applications/<str:loan_id>/repayments/<str:repayment_id>/mpesa-status", legacy_view(views_loans.micro_loan_repayment_status)),
+    path("api/micro-loans/applications/<str:loan_id>/documents", legacy_view(views_loans.micro_loan_documents)),
+    path("api/micro-loans/applications/<str:loan_id>/voucher-redemptions", legacy_view(views_loans.micro_loan_voucher_redemptions)),
+    path("api/risk-credit/records", legacy_view(views_risk.risk_credit_records)),
+    path("api/risk-credit/records/<str:record_id>", legacy_view(views_risk.risk_credit_record_detail)),
+    path("api/risk-credit/records/<str:record_id>/submit", legacy_view(views_risk.risk_credit_record_submit)),
     path("api/admin/overview", legacy_view(views_admin.admin_overview)),
     path("api/admin/analytics", legacy_view(views_admin.admin_analytics)),
     path("api/admin/users", legacy_view(views_admin.admin_users)),
@@ -79,11 +93,16 @@ urlpatterns = [
     path("api/admin/orders/<str:order_id>/confirm-delivery", legacy_view(views_admin.admin_order_confirm_delivery)),
     path("api/admin/orders/<str:order_id>/resolve-dispute", legacy_view(views_admin.admin_order_resolve_dispute)),
     path("api/admin/orders/<str:order_id>/release", legacy_view(views_admin.admin_order_release)),
+    path("api/admin/logistics/dispatches", legacy_view(views_logistics.admin_logistics_dispatches)),
+    path("api/admin/logistics/dispatches/<str:dispatch_id>", legacy_view(views_logistics.admin_logistics_dispatch_detail)),
     path("api/admin/loan-candidates", legacy_view(views_admin.admin_loan_candidates)),
     path("api/admin/loan-offers", legacy_view(views_admin.admin_loan_offers)),
     path("api/admin/loan-offers/<str:offer_id>", legacy_view(views_admin.admin_loan_offer_detail)),
+    path("api/admin/loans/risk-summary", legacy_view(views_admin.admin_loan_risk_summary)),
     path("api/admin/loans", legacy_view(views_admin.admin_loans)),
     path("api/admin/loans/<str:loan_id>", legacy_view(views_admin.admin_loan_detail)),
+    path("api/admin/risk-credit", legacy_view(views_risk.admin_risk_credit_records)),
+    path("api/admin/risk-credit/<str:record_id>", legacy_view(views_risk.admin_risk_credit_record_decision)),
     path("api/admin/verifications", legacy_view(views_admin.admin_verifications)),
     path("api/admin/verifications/<str:verification_id>", legacy_view(views_admin.admin_verification_detail)),
     path("api/admin/feature-flags", legacy_view(views_admin.admin_feature_flags)),

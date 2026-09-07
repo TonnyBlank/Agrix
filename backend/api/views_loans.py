@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
+import logging
 import uuid
 
 from .common import (
@@ -21,8 +22,14 @@ from .common import (
     resolve_app_role,
     write_user_notification,
     write_user_notifications,
+    initiate_stk_push,
+    query_stk_push,
+    resolve_mpesa_payment_state,
+    mpesa_mock_enabled,
 )
 from .http import HttpRequest, JsonResponse
+
+logger = logging.getLogger(__name__)
 
 PRODUCT_CONFIG = {
     "seasonal_working_capital": {
@@ -72,6 +79,40 @@ COLLATERAL_ITEM_KEYS = (
     "location",
     "notes",
 )
+
+LOAN_REPAYMENT_STATUSES = {"initiated", "pending_confirmation", "paid", "failed"}
+LOAN_DOCUMENT_STATUSES = {"submitted", "verified", "rejected", "waived"}
+
+
+def parse_iso_datetime(value: Any) -> datetime | None:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def paid_repayments(repayments: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [
+        repayment
+        for repayment in (repayments or [])
+        if str(repayment.get("payment_status") or "paid").strip().lower() == "paid"
+    ]
+
+
+def extract_mpesa_receipt_number(payload: dict[str, Any] | None) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("MpesaReceiptNumber", "mpesaReceiptNumber", "ReceiptNumber", "receiptNumber"):
+        value = payload.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    metadata = (((payload.get("CallbackMetadata") or {}).get("Item")) if isinstance(payload.get("CallbackMetadata"), dict) else []) or []
+    for item in metadata:
+        if str(item.get("Name") or "").strip() == "MpesaReceiptNumber" and item.get("Value") not in (None, ""):
+            return str(item.get("Value")).strip()
+    return None
 
 
 def normalize_text_list(value: Any) -> list[str]:
@@ -189,15 +230,24 @@ def serialize_loan_offer(offer: dict[str, Any], available_amount: float, eligibi
     }
 
 
-def serialize_loan_application(loan: dict[str, Any], repayments: list[dict[str, Any]]) -> dict[str, Any]:
+def serialize_loan_application(
+    loan: dict[str, Any],
+    repayments: list[dict[str, Any]],
+    *,
+    documents: list[dict[str, Any]] | None = None,
+    voucher_redemptions: list[dict[str, Any]] | None = None,
+    ledger_entries: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    paid = paid_repayments(repayments)
     schedule = build_loan_schedule(
         loan.get("approved_amount"),
         loan.get("requested_amount"),
         loan.get("interest_rate"),
         loan.get("repayment_days"),
         loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-        repayments,
+        paid,
     )
+    operational = build_loan_operational_snapshot(loan, repayments, voucher_redemptions=voucher_redemptions)
     return {
         **loan,
         "requested_amount": float(loan.get("requested_amount") or 0),
@@ -215,7 +265,14 @@ def serialize_loan_application(loan: dict[str, Any], repayments: list[dict[str, 
         "collateral_types": normalize_text_list(loan.get("collateral_types")),
         "required_documents": normalize_text_list(loan.get("required_documents")),
         "collateral_items": normalize_collateral_items(loan.get("collateral_items")),
+        "credit_score": int(loan.get("credit_score") or 0),
+        "credit_score_snapshot": loan.get("credit_score_snapshot") if isinstance(loan.get("credit_score_snapshot"), dict) else {},
+        "eligibility_explanation": loan.get("eligibility_explanation") if isinstance(loan.get("eligibility_explanation"), list) else [],
+        **operational,
         "repayments": repayments,
+        "documents": documents or [],
+        "voucher_redemptions": voucher_redemptions or [],
+        "ledger_entries": ledger_entries or [],
         "loan_summary": schedule["summary"],
         "amortization_schedule": schedule["schedule"],
     }
@@ -265,11 +322,160 @@ def compute_loan_eligibility(role: str, profile: dict[str, Any] | None, verifica
     minimum = 25000 if role == "company" else 10000
     maximum = 1200000 if role == "company" else 250000
     eligible_amount = max(minimum, min(maximum, round(raw_eligible_amount / 1000) * 1000)) if all_checks else 0
+    readiness = [
+        {
+            "key": "identity",
+            "label": "Verified identity",
+            "met": checks[0],
+            "detail": "ID verification reduces fraud risk and unlocks formal lending review.",
+            "points": 20,
+        },
+        {
+            "key": "payout",
+            "label": "Payout details completed",
+            "met": checks[1],
+            "detail": "A verified M-Pesa or bank payout method supports disbursement and collections.",
+            "points": 15,
+        },
+        {
+            "key": "profile",
+            "label": "Profile and county completed",
+            "met": checks[2],
+            "detail": "Name, phone, and county let lenders match the borrower to local offers and branches.",
+            "points": 10,
+        },
+        {
+            "key": "orders",
+            "label": "At least 2 successful orders in 90 days",
+            "met": checks[3],
+            "detail": f"{total_qualified_orders} qualified order{'s' if total_qualified_orders != 1 else ''} found in the last 90 days.",
+            "points": min(20, total_qualified_orders * 5),
+        },
+        {
+            "key": "revenue",
+            "label": "At least KES 10,000 revenue in 90 days",
+            "met": checks[4],
+            "detail": f"Recent qualified revenue is KES {revenue_90:,.0f}.",
+            "points": min(20, int(revenue_90 / 5000)),
+        },
+    ]
+    score = sum(item["points"] for item in readiness if item["met"])
+    if all_checks:
+        score += 10
+    credit_score = max(0, min(100, score))
     return {
         "isEligible": all_checks and eligible_amount > 0,
         "eligibleAmount": eligible_amount,
         "averageMonthlyRevenue": average_monthly_revenue,
         "totalQualifiedOrders": total_qualified_orders,
+        "revenue90": revenue_90,
+        "creditScore": credit_score,
+        "readinessChecks": readiness,
+        "missingRequirements": [item for item in readiness if not item["met"]],
+    }
+
+
+def loan_credit_snapshot(eligibility: dict[str, Any], role: str, requested_amount: float, outstanding: float) -> dict[str, Any]:
+    return {
+        "role": role,
+        "creditScore": int(eligibility.get("creditScore") or 0),
+        "eligibleAmount": float(eligibility.get("eligibleAmount") or 0),
+        "requestedAmount": requested_amount,
+        "outstandingLoanBalance": outstanding,
+        "averageMonthlyRevenue": float(eligibility.get("averageMonthlyRevenue") or 0),
+        "revenue90": float(eligibility.get("revenue90") or 0),
+        "totalQualifiedOrders": int(eligibility.get("totalQualifiedOrders") or 0),
+        "capturedAt": now_iso(),
+    }
+
+
+def build_loan_operational_snapshot(
+    loan: dict[str, Any],
+    repayments: list[dict[str, Any]] | None,
+    *,
+    voucher_redemptions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    paid = paid_repayments(repayments)
+    schedule = build_loan_schedule(
+        loan.get("approved_amount"),
+        loan.get("requested_amount"),
+        loan.get("interest_rate"),
+        loan.get("repayment_days"),
+        loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+        paid,
+    )
+    summary = schedule["summary"]
+    status = str(loan.get("status") or "pending_review")
+    remaining_balance = float(summary["remainingBalance"])
+    principal = float(summary["principal"])
+    start_date = parse_iso_datetime(summary.get("startDate")) or datetime.utcnow()
+    repayment_days = max(1, int(loan.get("repayment_days") or 30))
+    due_date = start_date + timedelta(days=repayment_days)
+    paid_count = len(paid)
+    next_due = start_date + timedelta(days=min(repayment_days, max(30, (paid_count + 1) * 30)))
+    grace_period_days = int(loan.get("grace_period_days") or 7)
+
+    if status in {"pending_review", "approved", "rejected"}:
+        days_late = 0
+        arrears_status = "current"
+        repayment_status = "not_started"
+    elif remaining_balance <= 0 or status == "repaid":
+        days_late = 0
+        arrears_status = "repaid"
+        repayment_status = "repaid"
+    else:
+        now = datetime.utcnow()
+        days_late = max(0, (now - due_date).days)
+        if days_late > 30:
+            arrears_status = "default_risk"
+        elif days_late > grace_period_days:
+            arrears_status = "overdue"
+        elif days_late > 0:
+            arrears_status = "grace"
+        else:
+            arrears_status = "current"
+        repayment_status = "late" if arrears_status in {"overdue", "default_risk"} else "due" if arrears_status == "grace" else "on_track"
+
+    security_type = normalize_security_type(loan.get("security_type"))
+    requires_documents = bool(loan.get("requires_branch_visit")) or security_type != "unsecured" or bool(normalize_text_list(loan.get("required_documents")))
+    branch_status = normalize_branch_visit_status(loan.get("branch_visit_status"), bool(loan.get("requires_branch_visit")))
+    if not requires_documents:
+        document_status = "not_required"
+    elif branch_status == "waived":
+        document_status = "waived"
+    elif branch_status == "verified":
+        document_status = "verified"
+    elif normalize_collateral_items(loan.get("collateral_items")) or normalize_guarantors(loan.get("guarantors")):
+        document_status = "submitted"
+    else:
+        document_status = str(loan.get("document_status") or "required")
+
+    disbursement_method = str(loan.get("disbursement_method") or "mpesa")
+    voucher_code = clean_optional_text(loan.get("voucher_code"))
+    if disbursement_method != "voucher":
+        voucher_status = "not_applicable"
+    elif voucher_redemptions:
+        voucher_status = "redeemed"
+    elif voucher_code:
+        voucher_status = "issued"
+    else:
+        voucher_status = "not_applicable"
+
+    late_fee_amount = 0.0
+    if arrears_status in {"overdue", "default_risk"}:
+        late_fee_amount = round(max(50.0, principal * 0.01), 2)
+
+    return {
+        "due_date": due_date.replace(microsecond=0).isoformat() + "Z" if status not in {"pending_review", "approved", "rejected"} else None,
+        "days_late": days_late,
+        "late_fee_amount": late_fee_amount,
+        "arrears_status": arrears_status,
+        "next_payment_due_at": next_due.replace(microsecond=0).isoformat() + "Z" if repayment_status not in {"not_started", "repaid"} else None,
+        "next_payment_amount": round(min(float(summary["scheduledPayment"]), remaining_balance), 2) if remaining_balance > 0 else 0,
+        "repayment_status": repayment_status,
+        "document_status": document_status,
+        "voucher_status": voucher_status,
+        "ledger_status": "closed" if repayment_status == "repaid" else str(loan.get("ledger_status") or "open"),
     }
 
 
@@ -283,7 +489,7 @@ def fetch_outstanding_loan_balance(client, user_id: str) -> float:
         return 0
     repayments, _ = client.select(
         "micro_loan_repayments",
-        select="id, loan_application_id, amount, payment_method, payment_ref, phone_number, note, created_at",
+        select="id, loan_application_id, amount, payment_method, payment_status, payment_ref, phone_number, note, created_at",
         filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
         order="created_at.asc",
     )
@@ -298,10 +504,144 @@ def fetch_outstanding_loan_balance(client, user_id: str) -> float:
             loan.get("interest_rate"),
             loan.get("repayment_days"),
             loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-            repayments_by_loan.get(loan["id"], []),
+            paid_repayments(repayments_by_loan.get(loan["id"], [])),
         )
         total += float(schedule["summary"]["remainingBalance"])
     return round(total, 2)
+
+
+def group_by_loan_id(rows: list[dict[str, Any]] | None) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows or []:
+        loan_id = row.get("loan_application_id")
+        if loan_id:
+            grouped.setdefault(str(loan_id), []).append(row)
+    return grouped
+
+
+def fetch_loan_related_records(client, loan_ids: list[str]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    if not loan_ids:
+        return {"repayments": {}, "documents": {}, "voucher_redemptions": {}, "ledger_entries": {}}
+    repayments, _ = client.select(
+        "micro_loan_repayments",
+        select="id, loan_application_id, amount, payment_method, payment_status, payment_ref, phone_number, note, checkout_request_id, merchant_request_id, payment_error, verified_at, created_at",
+        filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
+        order="created_at.asc",
+    )
+    try:
+        documents, _ = client.select(
+            "micro_loan_documents",
+            filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
+            order="created_at.desc",
+        )
+    except Exception as exc:
+        logger.info("Loan documents table not available yet: %s", exc)
+        documents = []
+    try:
+        voucher_redemptions, _ = client.select(
+            "micro_loan_voucher_redemptions",
+            filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
+            order="redeemed_at.desc",
+        )
+    except Exception as exc:
+        logger.info("Loan voucher redemptions table not available yet: %s", exc)
+        voucher_redemptions = []
+    try:
+        ledger_entries, _ = client.select(
+            "micro_loan_ledger_entries",
+            filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
+            order="created_at.asc",
+        )
+    except Exception as exc:
+        logger.info("Loan ledger table not available yet: %s", exc)
+        ledger_entries = []
+    return {
+        "repayments": group_by_loan_id(repayments),
+        "documents": group_by_loan_id(documents),
+        "voucher_redemptions": group_by_loan_id(voucher_redemptions),
+        "ledger_entries": group_by_loan_id(ledger_entries),
+    }
+
+
+def persist_loan_operational_snapshot(client, loan: dict[str, Any], repayments: list[dict[str, Any]] | None, voucher_redemptions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    updates = build_loan_operational_snapshot(loan, repayments, voucher_redemptions=voucher_redemptions)
+    updates["updated_at"] = now_iso()
+    try:
+        return client.update("micro_loan_applications", updates, filters={"id": f"eq.{loan['id']}"}, single=True)
+    except Exception as exc:
+        logger.warning("Failed to persist loan operational snapshot for %s: %s", loan.get("id"), exc)
+        return {**loan, **updates}
+
+
+def write_loan_ledger_entry(
+    client,
+    *,
+    loan: dict[str, Any],
+    entry_type: str,
+    debit: float = 0,
+    credit: float = 0,
+    balance_after: float = 0,
+    reference: str | None = None,
+    note: str | None = None,
+) -> None:
+    try:
+        client.insert(
+            "micro_loan_ledger_entries",
+            {
+                "loan_application_id": loan["id"],
+                "user_id": loan["user_id"],
+                "entry_type": entry_type,
+                "debit": round(float(debit or 0), 2),
+                "credit": round(float(credit or 0), 2),
+                "balance_after": round(float(balance_after or 0), 2),
+                "reference": reference,
+                "note": note,
+            },
+            single=True,
+        )
+    except Exception as exc:
+        try:
+            admin_client().insert(
+                "micro_loan_ledger_entries",
+                {
+                    "loan_application_id": loan["id"],
+                    "user_id": loan["user_id"],
+                    "entry_type": entry_type,
+                    "debit": round(float(debit or 0), 2),
+                    "credit": round(float(credit or 0), 2),
+                    "balance_after": round(float(balance_after or 0), 2),
+                    "reference": reference,
+                    "note": note,
+                },
+                single=True,
+            )
+        except Exception as admin_exc:
+            logger.warning("Failed to write loan ledger entry for %s: %s / %s", loan.get("id"), exc, admin_exc)
+
+
+def update_loan_after_repayments(client, loan: dict[str, Any], repayments: list[dict[str, Any]]) -> dict[str, Any]:
+    schedule = build_loan_schedule(
+        loan.get("approved_amount"),
+        loan.get("requested_amount"),
+        loan.get("interest_rate"),
+        loan.get("repayment_days"),
+        loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+        paid_repayments(repayments),
+    )
+    next_status = "repaid" if float(schedule["summary"]["remainingBalance"]) <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
+    base_updates = {
+        "status": next_status,
+        "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+        "repaid_at": now_iso() if next_status == "repaid" else None,
+        "updated_at": now_iso(),
+    }
+    base_updates.update(build_loan_operational_snapshot({**loan, **base_updates}, repayments))
+    return client.update(
+        "micro_loan_applications",
+        base_updates,
+        filters={"id": f"eq.{loan['id']}"},
+        single=True,
+    )
 
 
 @api_view
@@ -340,18 +680,17 @@ def micro_loan_applications(request: HttpRequest):
     if request.method == "GET":
         loans, _ = request.supabase.select("micro_loan_applications", filters={"user_id": f"eq.{request.user_id}"}, order="created_at.desc")
         loan_ids = [loan["id"] for loan in loans or []]
-        repayments = []
-        if loan_ids:
-            repayments, _ = request.supabase.select(
-                "micro_loan_repayments",
-                select="id, loan_application_id, amount, payment_method, payment_ref, phone_number, note, created_at",
-                filters={"loan_application_id": f"in.{postgrest_in(loan_ids)}"},
-                order="created_at.asc",
+        related = fetch_loan_related_records(request.supabase, loan_ids)
+        rows = [
+            serialize_loan_application(
+                loan,
+                related["repayments"].get(loan["id"], []),
+                documents=related["documents"].get(loan["id"], []),
+                voucher_redemptions=related["voucher_redemptions"].get(loan["id"], []),
+                ledger_entries=related["ledger_entries"].get(loan["id"], []),
             )
-        repayments_by_loan = {}
-        for repayment in repayments or []:
-            repayments_by_loan.setdefault(repayment["loan_application_id"], []).append(repayment)
-        rows = [serialize_loan_application(loan, repayments_by_loan.get(loan["id"], [])) for loan in loans or []]
+            for loan in loans or []
+        ]
         return JsonResponse(rows, safe=False)
 
     if request.method != "POST":
@@ -384,7 +723,8 @@ def micro_loan_applications(request: HttpRequest):
         raise ApiException("You are not eligible for borrowing yet. Complete readiness requirements first.", 400)
     offer_id = body.get("offerId")
     product_type = body.get("productType")
-    available_amount = eligibility["eligibleAmount"] - fetch_outstanding_loan_balance(request.supabase, request.user_id)
+    outstanding_balance = fetch_outstanding_loan_balance(request.supabase, request.user_id)
+    available_amount = eligibility["eligibleAmount"] - outstanding_balance
     if offer_id:
         offer, _ = request.supabase.select(
             "micro_loan_offers",
@@ -483,6 +823,9 @@ def micro_loan_applications(request: HttpRequest):
     if disbursement_method == "voucher" and application_status == "disbursed":
         voucher_code = f"ALV-{str(uuid.uuid4())[:8].upper()}"
 
+    score_snapshot = loan_credit_snapshot(eligibility, role, requested_amount, outstanding_balance)
+    requires_documents = requires_branch_visit or security_type != "unsecured" or bool(required_documents)
+
     created = request.supabase.insert(
         "micro_loan_applications",
         {
@@ -510,6 +853,14 @@ def micro_loan_applications(request: HttpRequest):
             "disbursement_method": disbursement_method,
             "repayment_method": repayment_method,
             "voucher_code": voucher_code,
+            "credit_score": int(eligibility.get("creditScore") or 0),
+            "credit_score_snapshot": score_snapshot,
+            "eligibility_explanation": eligibility.get("readinessChecks") or [],
+            "document_status": "required" if requires_documents else "not_required",
+            "voucher_status": "issued" if voucher_code else "not_applicable",
+            "repayment_status": "on_track" if application_status == "disbursed" else "not_started",
+            "arrears_status": "current",
+            "ledger_status": "open",
             "note": auto_note,
             "disbursed_at": now_iso() if application_status == "disbursed" else None,
             "reviewed_at": now_iso() if application_status == "disbursed" else None,
@@ -517,6 +868,18 @@ def micro_loan_applications(request: HttpRequest):
         },
         single=True,
     )
+    created = persist_loan_operational_snapshot(request.supabase, created, [])
+    if application_status == "disbursed":
+        schedule = build_loan_schedule(created.get("approved_amount"), created.get("requested_amount"), created.get("interest_rate"), created.get("repayment_days"), created.get("disbursed_at") or created.get("created_at"), [])
+        write_loan_ledger_entry(
+            request.supabase,
+            loan=created,
+            entry_type="disbursement",
+            debit=float(schedule["summary"]["principal"]),
+            balance_after=float(schedule["summary"]["remainingBalance"]),
+            reference=voucher_code or f"MPESA-{str(created.get('id'))[:8]}",
+            note=f"{disbursement_method.upper()} loan disbursement opened.",
+        )
     notification_admin = admin_client()
     write_user_notification(
         notification_admin,
@@ -582,7 +945,7 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         raise ApiException("This loan is not disbursed yet. Complete review and branch verification first.", 400)
     repayments, _ = request.supabase.select(
         "micro_loan_repayments",
-        select="id, amount, payment_method, payment_ref, phone_number, note, created_at, loan_application_id",
+        select="id, amount, payment_method, payment_status, payment_ref, phone_number, note, checkout_request_id, merchant_request_id, payment_error, verified_at, created_at, loan_application_id",
         filters={"loan_application_id": f"eq.{loan_id}"},
         order="created_at.asc",
     )
@@ -592,7 +955,7 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         loan.get("interest_rate"),
         loan.get("repayment_days"),
         loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-        repayments or [],
+        paid_repayments(repayments or []),
     )
     if schedule["summary"]["remainingBalance"] <= 0:
         raise ApiException("This loan is already fully repaid.", 400)
@@ -609,12 +972,46 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
         raise ApiException(f"This loan is configured for {expected} repayments.", 400)
 
     phone_number = normalize_kenyan_phone(str(body.get("phoneNumber") or "")) if payment_method == "mpesa" else None
-    payment_ref_prefix = "LN" if payment_method == "mpesa" else "PWP"
-    repayment_note = (
-        f"M-Pesa repayment posted to {loan['product_title']}."
-        if payment_method == "mpesa"
-        else f"Pay with Produce repayment allocation posted to {loan['product_title']}."
-    )
+    if payment_method == "mpesa":
+        try:
+            stk = initiate_stk_push(phone_number, amount, f"LN-{loan_id[:8]}", f"AgriLink loan {loan_id[:8]}")
+        except Exception:
+            if not mpesa_mock_enabled():
+                raise
+            now_tag = int(datetime.utcnow().timestamp())
+            stk = {
+                "CheckoutRequestID": f"mock-loan-checkout-{loan_id[:8]}-{now_tag}",
+                "MerchantRequestID": f"mock-loan-merchant-{loan_id[:8]}-{now_tag}",
+                "CustomerMessage": "Sandbox mock loan repayment started. Use Check Payment to confirm.",
+                "ResponseDescription": "Sandbox mock loan repayment started",
+            }
+        repayment = request.supabase.insert(
+            "micro_loan_repayments",
+            {
+                "loan_application_id": loan_id,
+                "user_id": request.user_id,
+                "amount": amount,
+                "payment_method": "mpesa",
+                "payment_status": "initiated",
+                "payment_ref": None,
+                "phone_number": phone_number,
+                "checkout_request_id": stk.get("CheckoutRequestID"),
+                "merchant_request_id": stk.get("MerchantRequestID"),
+                "payment_error": None,
+                "note": f"M-Pesa repayment request initiated for {loan['product_title']}.",
+            },
+            single=True,
+        )
+        updated = persist_loan_operational_snapshot(request.supabase, loan, repayments or [])
+        return JsonResponse(
+            {
+                "message": stk.get("CustomerMessage") or stk.get("ResponseDescription") or "M-Pesa repayment request initiated.",
+                "payment_status": "initiated",
+                "repayment": repayment,
+                "loan": serialize_loan_application(updated, [*(repayments or []), repayment]),
+            },
+            status=201,
+        )
 
     repayment = request.supabase.insert(
         "micro_loan_repayments",
@@ -622,38 +1019,228 @@ def micro_loan_repay(request: HttpRequest, loan_id: str):
             "loan_application_id": loan_id,
             "user_id": request.user_id,
             "amount": amount,
-            "payment_method": payment_method,
-            "payment_ref": f"{payment_ref_prefix}-{int(datetime.utcnow().timestamp())}",
-            "phone_number": phone_number,
-            "note": repayment_note,
+            "payment_method": "pay_with_produce",
+            "payment_status": "paid",
+            "payment_ref": f"PWP-{int(datetime.utcnow().timestamp())}",
+            "phone_number": None,
+            "verified_at": now_iso(),
+            "note": f"Pay with Produce repayment allocation posted to {loan['product_title']}.",
         },
         single=True,
     )
+    all_repayments = [*(repayments or []), repayment]
+    updated = update_loan_after_repayments(request.supabase, loan, all_repayments)
     next_schedule = build_loan_schedule(
         loan.get("approved_amount"),
         loan.get("requested_amount"),
         loan.get("interest_rate"),
         loan.get("repayment_days"),
         loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-        [*(repayments or []), repayment],
+        paid_repayments(all_repayments),
     )
-    next_status = "repaid" if next_schedule["summary"]["remainingBalance"] <= 0 else loan["status"] if loan["status"] in {"approved", "disbursed"} else "disbursed"
-    updated = request.supabase.update(
-        "micro_loan_applications",
+    write_loan_ledger_entry(
+        request.supabase,
+        loan=updated,
+        entry_type="repayment",
+        credit=amount,
+        balance_after=float(next_schedule["summary"]["remainingBalance"]),
+        reference=repayment.get("payment_ref"),
+        note="Pay-with-Produce repayment posted.",
+    )
+    return JsonResponse(
         {
-            "status": next_status,
-            "disbursed_at": loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
-            "repaid_at": now_iso() if next_status == "repaid" else None,
-            "updated_at": now_iso(),
+            "message": f"Pay with Produce repayment of KES {amount:.2f} received successfully.",
+            "payment_status": "paid",
+            "repayment": repayment,
+            "loan": serialize_loan_application(updated, all_repayments),
+        }
+    )
+
+
+@api_view
+@require_auth
+def micro_loan_repayment_status(request: HttpRequest, loan_id: str, repayment_id: str):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    loan, _ = request.supabase.select("micro_loan_applications", filters={"id": f"eq.{loan_id}", "user_id": f"eq.{request.user_id}"}, single=True)
+    if not loan:
+        raise ApiException("Loan application not found.", 404)
+    repayment, _ = request.supabase.select(
+        "micro_loan_repayments",
+        select="id, loan_application_id, amount, payment_method, payment_status, payment_ref, phone_number, note, checkout_request_id, merchant_request_id, payment_error, verified_at, created_at",
+        filters={"id": f"eq.{repayment_id}", "loan_application_id": f"eq.{loan_id}", "user_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not repayment:
+        raise ApiException("Loan repayment not found.", 404)
+    if repayment.get("payment_method") != "mpesa":
+        return JsonResponse({"payment_status": repayment.get("payment_status") or "paid", "repayment": repayment, "loan": serialize_loan_application(loan, [repayment])})
+    current_status = str(repayment.get("payment_status") or "paid")
+    if current_status == "paid":
+        related = fetch_loan_related_records(request.supabase, [loan_id])
+        return JsonResponse(
+            {
+                "payment_status": "paid",
+                "resultCode": "0",
+                "resultDesc": "Loan repayment already confirmed.",
+                "repayment": repayment,
+                "loan": serialize_loan_application(loan, related["repayments"].get(loan_id, [])),
+            }
+        )
+    checkout_request_id = repayment.get("checkout_request_id")
+    if not checkout_request_id:
+        raise ApiException("No M-Pesa request found for this loan repayment.", 400)
+    try:
+        result = query_stk_push(str(checkout_request_id))
+    except Exception:
+        if not mpesa_mock_enabled():
+            raise
+        result = {
+            "ResultCode": "0",
+            "ResultDesc": "Sandbox mock loan repayment confirmed",
+            "ResponseDescription": "Sandbox mock loan repayment confirmed",
+            "MpesaReceiptNumber": f"MOCK-LN-{str(repayment_id)[:8]}",
+        }
+    payment_status, result_code, result_desc = resolve_mpesa_payment_state(result)
+    receipt_number = extract_mpesa_receipt_number(result)
+    admin = admin_client()
+    if payment_status == "paid":
+        updated_repayment = admin.update(
+            "micro_loan_repayments",
+            {
+                "payment_status": "paid",
+                "payment_ref": receipt_number or repayment.get("payment_ref") or f"LN-{int(datetime.utcnow().timestamp())}",
+                "payment_error": None,
+                "verified_at": now_iso(),
+            },
+            filters={"id": f"eq.{repayment_id}"},
+            single=True,
+        )
+    elif payment_status == "failed":
+        updated_repayment = admin.update(
+            "micro_loan_repayments",
+            {"payment_status": "failed", "payment_error": result_desc},
+            filters={"id": f"eq.{repayment_id}"},
+            single=True,
+        )
+    else:
+        updated_repayment = admin.update(
+            "micro_loan_repayments",
+            {"payment_status": "pending_confirmation", "payment_error": None},
+            filters={"id": f"eq.{repayment_id}"},
+            single=True,
+        )
+    related = fetch_loan_related_records(admin, [loan_id])
+    all_repayments = related["repayments"].get(loan_id, [])
+    updated_loan = update_loan_after_repayments(admin, loan, all_repayments) if payment_status == "paid" else persist_loan_operational_snapshot(admin, loan, all_repayments)
+    if payment_status == "paid":
+        next_schedule = build_loan_schedule(
+            loan.get("approved_amount"),
+            loan.get("requested_amount"),
+            loan.get("interest_rate"),
+            loan.get("repayment_days"),
+            loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+            paid_repayments(all_repayments),
+        )
+        write_loan_ledger_entry(
+            admin,
+            loan=updated_loan,
+            entry_type="repayment",
+            credit=float(updated_repayment.get("amount") or 0),
+            balance_after=float(next_schedule["summary"]["remainingBalance"]),
+            reference=updated_repayment.get("payment_ref"),
+            note="M-Pesa loan repayment confirmed.",
+        )
+    return JsonResponse(
+        {
+            "payment_status": payment_status,
+            "resultCode": result_code,
+            "resultDesc": result_desc,
+            "repayment": updated_repayment,
+            "loan": serialize_loan_application(updated_loan, all_repayments),
+        }
+    )
+
+
+@api_view
+@require_auth
+def micro_loan_documents(request: HttpRequest, loan_id: str):
+    loan, _ = request.supabase.select("micro_loan_applications", filters={"id": f"eq.{loan_id}", "user_id": f"eq.{request.user_id}"}, single=True)
+    if not loan:
+        raise ApiException("Loan application not found.", 404)
+    if request.method == "GET":
+        rows, _ = request.supabase.select("micro_loan_documents", filters={"loan_application_id": f"eq.{loan_id}"}, order="created_at.desc")
+        return JsonResponse(rows or [], safe=False)
+    if request.method != "POST":
+        return method_not_allowed(["GET", "POST"])
+    body = parse_json_body(request)
+    document_type = clean_optional_text(body.get("documentType") or body.get("document_type"))
+    document_name = clean_optional_text(body.get("documentName") or body.get("document_name"))
+    if not document_type or not document_name:
+        raise ApiException("Document type and name are required.", 400)
+    created = request.supabase.insert(
+        "micro_loan_documents",
+        {
+            "loan_application_id": loan_id,
+            "user_id": request.user_id,
+            "document_type": document_type,
+            "document_name": document_name,
+            "document_url": clean_optional_text(body.get("documentUrl") or body.get("document_url")),
+            "status": "submitted",
         },
+        single=True,
+    )
+    updated_loan = request.supabase.update(
+        "micro_loan_applications",
+        {"document_status": "submitted", "updated_at": now_iso()},
         filters={"id": f"eq.{loan_id}"},
         single=True,
     )
-    success_label = "M-Pesa" if payment_method == "mpesa" else "Pay with Produce"
-    return JsonResponse(
+    return JsonResponse({"document": created, "loan": serialize_loan_application(updated_loan, [])}, status=201)
+
+
+@api_view
+@require_auth
+def micro_loan_voucher_redemptions(request: HttpRequest, loan_id: str):
+    loan, _ = request.supabase.select("micro_loan_applications", filters={"id": f"eq.{loan_id}", "user_id": f"eq.{request.user_id}"}, single=True)
+    if not loan:
+        raise ApiException("Loan application not found.", 404)
+    if request.method == "GET":
+        rows, _ = request.supabase.select("micro_loan_voucher_redemptions", filters={"loan_application_id": f"eq.{loan_id}"}, order="redeemed_at.desc")
+        return JsonResponse(rows or [], safe=False)
+    if request.method != "POST":
+        return method_not_allowed(["GET", "POST"])
+    if str(loan.get("disbursement_method") or "") != "voucher" or not loan.get("voucher_code"):
+        raise ApiException("This loan does not have an active voucher.", 400)
+    body = parse_json_body(request)
+    dealer_name = clean_optional_text(body.get("dealerName") or body.get("dealer_name"))
+    if not dealer_name:
+        raise ApiException("Dealer name is required.", 400)
+    redeemed_value = float(body.get("redeemedValue") or body.get("redeemed_value") or loan.get("approved_amount") or loan.get("requested_amount") or 0)
+    admin = admin_client()
+    created = admin.insert(
+        "micro_loan_voucher_redemptions",
         {
-            "message": f"{success_label} repayment of KES {amount:.2f} received successfully.",
-            "repayment": repayment,
-            "loan": serialize_loan_application(updated, [*(repayments or []), repayment]),
-        }
+            "loan_application_id": loan_id,
+            "user_id": request.user_id,
+            "voucher_code": loan["voucher_code"],
+            "dealer_name": dealer_name,
+            "dealer_location": clean_optional_text(body.get("dealerLocation") or body.get("dealer_location")),
+            "redeemed_value": max(0, round(redeemed_value, 2)),
+            "status": "redeemed",
+            "note": clean_optional_text(body.get("note")),
+        },
+        single=True,
     )
+    updated_loan = admin.update("micro_loan_applications", {"voucher_status": "redeemed", "updated_at": now_iso()}, filters={"id": f"eq.{loan_id}"}, single=True)
+    schedule = build_loan_schedule(updated_loan.get("approved_amount"), updated_loan.get("requested_amount"), updated_loan.get("interest_rate"), updated_loan.get("repayment_days"), updated_loan.get("disbursed_at") or updated_loan.get("created_at"), [])
+    write_loan_ledger_entry(
+        admin,
+        loan=updated_loan,
+        entry_type="voucher_redemption",
+        debit=redeemed_value,
+        balance_after=float(schedule["summary"]["remainingBalance"]),
+        reference=loan["voucher_code"],
+        note=f"Voucher redeemed at {dealer_name}.",
+    )
+    return JsonResponse({"redemption": created, "loan": serialize_loan_application(updated_loan, [])}, status=201)

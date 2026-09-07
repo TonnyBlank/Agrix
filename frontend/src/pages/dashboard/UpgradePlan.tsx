@@ -6,7 +6,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { motion } from "framer-motion";
 import { Check, Zap, Crown, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api";
 import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
@@ -92,6 +92,16 @@ export default function UpgradePlan() {
   const [paymentPhone, setPaymentPhone] = useState("");
   const [checkingPaymentId, setCheckingPaymentId] = useState<string | null>(null);
   const [pendingSubscriptionPayment, setPendingSubscriptionPayment] = useState<{ paymentId: string; planId: AppRole } | null>(null);
+  const autoRetryTimeoutRef = useRef<number | null>(null);
+
+  // Cleanup auto-retry timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (autoRetryTimeoutRef.current !== null) {
+        window.clearTimeout(autoRetryTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (paymentPhone.trim()) return;
@@ -114,7 +124,7 @@ export default function UpgradePlan() {
     navigate(nextRole === "farmer_pro" ? "/dashboard/pro" : "/dashboard/free");
   };
 
-  const checkSubscriptionPaymentStatus = async (paymentId: string, planId: AppRole) => {
+  const checkSubscriptionPaymentStatus = async (paymentId: string, planId: AppRole, isAutoRetry = false) => {
     setCheckingPaymentId(paymentId);
     try {
       const data = await apiFetch<{
@@ -126,17 +136,34 @@ export default function UpgradePlan() {
       }>(`/payments/subscriptions/${paymentId}/mpesa-status`);
 
       if (data.payment_status === "paid") {
+        if (autoRetryTimeoutRef.current !== null) {
+          window.clearTimeout(autoRetryTimeoutRef.current);
+          autoRetryTimeoutRef.current = null;
+        }
         finalizePaidPlan({ role: data.role, profile: data.profile }, planId);
         return;
       }
 
       if (data.payment_status === "failed") {
+        if (autoRetryTimeoutRef.current !== null) {
+          window.clearTimeout(autoRetryTimeoutRef.current);
+          autoRetryTimeoutRef.current = null;
+        }
         setPendingSubscriptionPayment(null);
         toast.error(data.resultDesc || "Subscription payment failed. Please try again.");
         return;
       }
 
-      toast.message(data.resultDesc || "Payment is still processing. Check again in a few seconds.");
+      // Still pending — schedule one automatic retry after 8 seconds (first check only)
+      if (!isAutoRetry && autoRetryTimeoutRef.current === null) {
+        toast.message("M-Pesa prompt sent! Auto-checking in 8 seconds…", { duration: 7000 });
+        autoRetryTimeoutRef.current = window.setTimeout(() => {
+          autoRetryTimeoutRef.current = null;
+          void checkSubscriptionPaymentStatus(paymentId, planId, true);
+        }, 8000);
+      } else {
+        toast.message(data.resultDesc || "Payment is still processing. Use Check M-Pesa to retry.");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not check M-Pesa payment status.");
     } finally {
@@ -270,7 +297,7 @@ export default function UpgradePlan() {
                     void checkSubscriptionPaymentStatus(pendingSubscriptionPayment.paymentId, pendingSubscriptionPayment.planId);
                     return;
                   }
-                  void handleUpgrade(plan.id);
+                  void handleUpgrade(plan.id as AppRole);
                 }}
                 disabled={isCurrent || upgrading !== null || (pendingSubscriptionPayment !== null && pendingSubscriptionPayment.planId !== plan.id)}
                 className={`w-full rounded-xl ${

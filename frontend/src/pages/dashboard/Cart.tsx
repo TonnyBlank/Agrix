@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { LoaderCircle, ShoppingBag, ShoppingCart, Store, Trash2 } from "lucide-react";
+import { LoaderCircle, ShieldCheck, ShoppingBag, ShoppingCart, Store, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 
@@ -9,7 +9,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useCart, type CartItem } from "@/hooks/useCart";
 import { apiFetch } from "@/lib/api";
 import { getApproxDistanceKm, normalizeLocationName } from "@/lib/locationDistance";
-import { buildDeliveryQuote, COUNTY_PICKUP_DISCLAIMER } from "@/lib/deliveryPricing";
+import { buildDeliveryQuote } from "@/lib/deliveryPricing";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -256,19 +256,9 @@ export default function Cart() {
     }
   };
 
-  const checkoutSingleItem = async (item: CartItem) => {
-    setBusyItemId(item.id);
-    const checkedOut = await checkoutItem(item);
-    if (checkedOut) {
-      toast.success("Order created from cart.");
-      void navigate("/dashboard/orders");
-    }
-    setBusyItemId(null);
-  };
-
   const checkoutSelectedItems = async () => {
     if (!selectedCheckoutableItems.length) {
-      toast.error("No selected checkout-ready items found in cart.");
+      toast.error("Select at least one ready item before checkout.");
       return;
     }
 
@@ -288,7 +278,7 @@ export default function Cart() {
     setIsCheckingOutSelected(false);
 
     if (successCount) {
-      toast.success(`${successCount} cart item${successCount === 1 ? "" : "s"} converted to orders.`);
+      toast.success(`${successCount} order${successCount === 1 ? "" : "s"} created. Pay securely with M-Pesa next.`);
       void navigate("/dashboard/orders");
     }
 
@@ -304,23 +294,23 @@ export default function Cart() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-1.5">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80">Marketplace Cart</p>
-              <h2 className="font-display text-2xl font-bold text-foreground">Mark items, review distance fees, then checkout</h2>
-              <p className="text-sm text-muted-foreground">Delivery fees are calculated from county distance and all deliveries are claimed at AgriLink county offices.</p>
+              <h2 className="font-display text-2xl font-bold text-foreground">Review your cart and checkout in one simple flow</h2>
+              <p className="text-sm text-muted-foreground">Select the items you want, confirm the total, then pay securely with M-Pesa from Orders.</p>
             </div>
             <div className="grid w-full max-w-md grid-cols-4 gap-2 text-center">
-              <div className="rounded-2xl border border-white/80 bg-white/85 p-3">
+              <div className="rounded-xl border border-white/80 bg-white/85 p-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Items</p>
                 <p className="mt-1 font-display text-xl font-bold text-foreground">{items.length}</p>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white/85 p-3">
-                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Marked</p>
+              <div className="rounded-xl border border-white/80 bg-white/85 p-3">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Selected</p>
                 <p className="mt-1 font-display text-xl font-bold text-foreground">{selectedCheckoutableItems.length}</p>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white/85 p-3">
+              <div className="rounded-xl border border-white/80 bg-white/85 p-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Subtotal</p>
                 <p className="mt-1 font-display text-xl font-bold text-foreground">KES {selectedSummary.subtotal.toLocaleString()}</p>
               </div>
-              <div className="rounded-2xl border border-white/80 bg-white/85 p-3">
+              <div className="rounded-xl border border-white/80 bg-white/85 p-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Total</p>
                 <p className="mt-1 font-display text-xl font-bold text-primary">KES {selectedSummary.total.toLocaleString()}</p>
               </div>
@@ -328,10 +318,16 @@ export default function Cart() {
           </div>
         </section>
 
-        <section className="rounded-[1.4rem] border border-amber-200/70 bg-amber-50/70 p-4 shadow-[0_16px_28px_-24px_rgba(245,158,11,0.24)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700/90">County Office Delivery Notice</p>
-          <p className="mt-2 text-sm text-foreground">{COUNTY_PICKUP_DISCLAIMER}</p>
-          <p className="mt-2 text-xs text-muted-foreground">Buyer funds move to AgriLink escrow first. Seller payout is only released after AgriLink admin delivery confirmation.</p>
+        <section className="rounded-[1.2rem] border border-emerald-200/70 bg-emerald-50/70 p-4 shadow-[0_16px_28px_-24px_rgba(16,185,129,0.24)]">
+          <div className="flex gap-3">
+            <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">Secure checkout</p>
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                You pay into AgriLink escrow. The seller is paid only after delivery is confirmed. Pickup happens through your AgriLink county office.
+              </p>
+            </div>
+          </div>
         </section>
 
         <section className="rounded-[1.4rem] border border-border/70 bg-white/90 p-4 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.2)] dark:bg-card/90">
@@ -340,7 +336,7 @@ export default function Cart() {
               <p className="text-sm font-semibold text-foreground">
                 {selectedCheckoutableItems.length} selected of {checkoutableItems.length} checkout-ready item{checkoutableItems.length === 1 ? "" : "s"}
               </p>
-              <p className="text-xs text-muted-foreground">Items with unavailable stock are flagged and must be adjusted before checkout.</p>
+              <p className="text-xs text-muted-foreground">Unavailable items are flagged. Ready items can be checked out together.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button asChild variant="outline" className="rounded-xl">
@@ -350,11 +346,11 @@ export default function Cart() {
               </Button>
               <Button variant="outline" className="rounded-xl" disabled={!checkoutableItems.length || isBulkSelecting} onClick={() => void toggleSelectAllReady()}>
                 {isBulkSelecting ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {allReadySelected ? "Unmark Ready" : "Mark All Ready"}
+                {allReadySelected ? "Clear Selection" : "Select All"}
               </Button>
               <Button className="rounded-xl" disabled={!selectedCheckoutableItems.length || isCheckingOutSelected} onClick={() => void checkoutSelectedItems()}>
                 {isCheckingOutSelected ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingBag className="mr-2 h-4 w-4" />}
-                Checkout Selected
+                Checkout Now
               </Button>
             </div>
           </div>
@@ -394,7 +390,11 @@ export default function Cart() {
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.03 }}
-                  className="rounded-[1.3rem] border border-border/70 bg-white/90 p-4 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.2)] dark:bg-card/90"
+                  className={`rounded-[1.3rem] border p-4 shadow-[0_12px_24px_-24px_rgba(15,23,42,0.2)] dark:bg-card/90 ${
+                    selectedByItemId[item.id] && canCheckout(item)
+                      ? "border-emerald-300 bg-emerald-50/45"
+                      : "border-border/70 bg-white/90"
+                  }`}
                 >
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div className="flex min-w-0 items-start gap-3">
@@ -479,14 +479,9 @@ export default function Cart() {
                     <p className="text-sm font-semibold text-foreground">
                       Line total: KES {lineTotal.toLocaleString()} • Payable with delivery: KES {lineTotalWithDelivery.toLocaleString()}
                     </p>
-                    <Button
-                      className="rounded-xl"
-                      disabled={!canCheckout(item) || itemBusy || !selectedByItemId[item.id]}
-                      onClick={() => void checkoutSingleItem(item)}
-                    >
-                      {itemBusy ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingBag className="mr-2 h-4 w-4" />}
-                      Checkout Item
-                    </Button>
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {selectedByItemId[item.id] && canCheckout(item) ? "Selected for checkout" : "Select this item to include it"}
+                    </p>
                   </div>
                 </motion.article>
               );

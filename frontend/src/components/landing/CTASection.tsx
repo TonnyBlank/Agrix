@@ -7,7 +7,7 @@ export default function CTASection() {
   return (
     <section className="py-24 md:py-32 bg-hero-gradient relative overflow-hidden">
       <div className="absolute inset-0 opacity-10">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-agri-gold-500 blur-[120px]" />
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-gold-500 blur-[120px]" />
         <div className="absolute bottom-1/4 right-1/4 w-64 h-64 rounded-full bg-primary blur-[100px]" />
       </div>
 

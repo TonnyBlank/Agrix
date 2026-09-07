@@ -2,7 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { getStoredRole } from "@/lib/subscription";
 import { API_BASE_URL } from "@/lib/api";
 
-export type AppRole = "farmer_free" | "farmer_pro" | "company" | "admin";
+export type AppRole = "farmer_free" | "farmer_pro" | "company" | "transporter" | "admin";
 export type LoanRole = "farmer_pro" | "company";
 export type LoanProductType = "seasonal_working_capital" | "equipment_top_up" | "buyer_contract_financing";
 export type LoanSecurityType = "unsecured" | "guarantor" | "collateral";
@@ -341,7 +341,7 @@ export type LoanOfferFormState = {
   required_documents_input: string;
 };
 
-export const ROLE_OPTIONS: AppRole[] = ["farmer_free", "farmer_pro", "company", "admin"];
+export const ROLE_OPTIONS: AppRole[] = ["farmer_free", "farmer_pro", "company", "transporter", "admin"];
 export const LOAN_STATUS_OPTIONS = ["pending_review", "approved", "rejected", "disbursed", "repaid"];
 export const BRANCH_VISIT_STATUS_OPTIONS: BranchVisitStatus[] = ["not_required", "pending_customer_visit", "documents_received", "valuation_pending", "verified", "waived"];
 export const LOAN_SECURITY_OPTIONS: LoanSecurityType[] = ["unsecured", "guarantor", "collateral"];
@@ -437,6 +437,7 @@ export function adminTone(tone: AdminTone) {
 
 export function adminRoleTone(role: AppRole): AdminTone {
   if (role === "admin") return "rose";
+  if (role === "transporter") return "sky";
   if (role === "farmer_pro") return "emerald";
   if (role === "company") return "emerald";
   return "amber";

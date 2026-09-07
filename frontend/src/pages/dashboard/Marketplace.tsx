@@ -7,7 +7,7 @@ import { useOrders } from "@/hooks/useOrders";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { formatApproxDistance, getApproxDistanceKm, normalizeLocationName } from "@/lib/locationDistance";
-import { buildDeliveryQuote, COUNTY_PICKUP_DISCLAIMER } from "@/lib/deliveryPricing";
+import { buildDeliveryQuote } from "@/lib/deliveryPricing";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -244,7 +244,7 @@ export default function Marketplace() {
     });
 
     if (createdOrder) {
-      toast.success("Order created. Continue in Orders to make payment once.");
+      toast.success("Order created. Pay securely with M-Pesa next.");
       setSelectedProduct(null);
       setQuantity("1");
       void navigate("/dashboard/orders", { replace: false });
@@ -260,6 +260,11 @@ export default function Marketplace() {
 
     if (quantityToAdd <= 0) {
       toast.error("Quantity must be greater than 0.");
+      return false;
+    }
+
+    if (!product.is_available || Number(product.stock) <= 0) {
+      toast.error("This product is not currently available.");
       return false;
     }
 
@@ -296,17 +301,16 @@ export default function Marketplace() {
               </div>
               <div>
                 <h2 className="font-display text-3xl font-bold text-foreground sm:text-4xl">
-                  Shop produce around your location first
+                  Shop agricultural products near you
                 </h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   {viewerCounty
-                    ? `Marketplace is using ${viewerLocation || viewerCounty} as your reference point, showing nearby counties first and estimating seller distance in kilometres.`
-                    : "Set your county in My Farm and the marketplace will prioritize nearby sellers, show county distance, and let you compare produce by location faster."}
+                    ? `Marketplace is using ${viewerLocation || viewerCounty} to show nearby sellers first and estimate delivery costs.`
+                    : "Set your county in My Farm to see nearby sellers first and compare delivery costs faster."}
                 </p>
                 </div>
               </div>
               <CartSummary itemCount={cartTotals.itemCount} total={cartTotals.total} />
-            </div>
             </div>
 
           <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -400,7 +404,7 @@ export default function Marketplace() {
           <DialogHeader>
             <DialogTitle className="font-display text-center text-2xl">{syncedSelectedProduct?.name}</DialogTitle>
             <DialogDescription className="text-center">
-              Buy directly from {syncedSelectedProduct?.profiles?.full_name || "the farmer"} and review the listing media before checkout.
+              Choose quantity, add to cart, or buy now from {syncedSelectedProduct?.profiles?.full_name || "the seller"}.
             </DialogDescription>
           </DialogHeader>
 
@@ -427,12 +431,12 @@ export default function Marketplace() {
 
                 <div className="rounded-[1.5rem] border border-border bg-muted/40 p-4">
                   <div className="flex flex-wrap gap-2">
-                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-background/70">{syncedSelectedProduct.category}</span>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-background/70">{syncedSelectedProduct.category}</span>
                     <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-muted-foreground dark:bg-background/70">
                       {syncedSelectedProduct.stock} {syncedSelectedProduct.unit} available
                     </span>
                     {syncedSelectedProduct.is_organic && (
-                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">Organic produce</span>
+                      <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">Organic</span>
                     )}
                     {selectedProductDistance && (
                       <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">
@@ -560,30 +564,39 @@ export default function Marketplace() {
                 <div className="rounded-[1.75rem] border border-emerald-200/70 bg-[linear-gradient(135deg,rgba(236,253,245,0.96),rgba(255,255,255,0.95))] p-5 shadow-sm dark:border-emerald-500/30 dark:bg-[linear-gradient(135deg,rgba(6,78,59,0.28),rgba(15,23,42,0.94))]">
                     <div className="flex items-start gap-3">
                       <div className="space-y-1">
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Next Step</p>
-                        <h4 className="font-display text-xl font-bold text-foreground">Use cart or order directly</h4>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Safe checkout</p>
+                        <h4 className="font-display text-xl font-bold text-foreground">Pay safely, then confirm delivery</h4>
                         <p className="text-sm leading-6 text-muted-foreground">
-                          Add to cart for batch checkout, or place one direct order now. Delivery is county-office pickup and payout to the seller is only released after AgriLink official delivery confirmation.
+                          Add to cart like a normal marketplace, or buy this item now. Your payment stays in AgriLink escrow until delivery is confirmed.
                         </p>
                       </div>
                     </div>
                     <div className="mt-5 rounded-[1.25rem] border border-emerald-200/70 bg-white/85 px-4 py-3 text-sm text-muted-foreground dark:border-emerald-500/20 dark:bg-background/60">
-                      {COUNTY_PICKUP_DISCLAIMER}
+                      Pickup is handled through the AgriLink county office flow shown at checkout.
                     </div>
                   </div>
 
                   <DialogFooter className="flex-col gap-2 sm:flex-col">
-                  <Button asChild variant="outline" className="h-12 w-full rounded-xl">
-                    <Link to="/dashboard/messages">
-                        <MessageCircle className="mr-2 h-4 w-4" /> Message Farmer
-                      </Link>
+                    <Button
+                      variant="outline"
+                      onClick={() => syncedSelectedProduct && void handleAddToCart(syncedSelectedProduct, parsedQuantity)}
+                      disabled={isAddingToCart || !syncedSelectedProduct.is_available || Number(syncedSelectedProduct.stock) <= 0}
+                      className="h-12 w-full rounded-xl"
+                    >
+                      <ShoppingCart className="mr-2 h-4 w-4" />
+                      {isAddingToCart ? "Adding to Cart..." : "Add to Cart"}
                     </Button>
-                  <Button variant="outline" onClick={() => syncedSelectedProduct && void handleAddToCart(syncedSelectedProduct, parsedQuantity)} disabled={isAddingToCart} className="h-12 w-full rounded-xl">
-                    <ShoppingCart className="mr-2 h-4 w-4" />
-                    {isAddingToCart ? "Adding to Cart..." : "Add to Cart"}
-                  </Button>
-                    <Button onClick={() => void handleBuy()} disabled={isCheckingOut} className="h-12 w-full rounded-xl">
-                      {isCheckingOut ? "Creating Order..." : "Place Order"}
+                    <Button
+                      onClick={() => void handleBuy()}
+                      disabled={isCheckingOut || !syncedSelectedProduct.is_available || Number(syncedSelectedProduct.stock) <= 0}
+                      className="h-12 w-full rounded-xl"
+                    >
+                      {isCheckingOut ? "Creating Order..." : "Buy Now"}
+                    </Button>
+                    <Button asChild variant="ghost" className="h-11 w-full rounded-xl">
+                      <Link to="/dashboard/messages">
+                        <MessageCircle className="mr-2 h-4 w-4" /> Message Seller
+                      </Link>
                     </Button>
                   </DialogFooter>
               </div>

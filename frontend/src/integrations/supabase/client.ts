@@ -8,18 +8,23 @@ const SUPABASE_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  throw new Error('Missing Supabase environment variables');
+  console.warn(
+    'Missing Supabase environment variables. Using a local placeholder client so the app can render.',
+  );
 }
 
 // Import the supabase client like this:
 // import { supabase } from "@/integrations/supabase/client";
 
-export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {
-    storage: localStorage,
-    persistSession: false,
-    autoRefreshToken: false,
-    lock: processLock,
-    lockAcquireTimeout: 15000,
-  }
-});
+export const supabase = createClient<Database>(
+  SUPABASE_URL || 'https://placeholder.supabase.co',
+  SUPABASE_KEY || 'placeholder-anon-key',
+  {
+    auth: {
+      storage: localStorage,
+      persistSession: true,
+      autoRefreshToken: true,
+      lock: processLock,
+    },
+  },
+);

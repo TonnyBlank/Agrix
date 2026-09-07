@@ -28,6 +28,11 @@ export default function DashboardRedirect() {
         return;
       }
 
+      if (role === "transporter") {
+        navigate("/dashboard/logistics", { replace: true });
+        return;
+      }
+
       if (role === "farmer_pro") {
         navigate("/dashboard/pro", { replace: true });
         return;

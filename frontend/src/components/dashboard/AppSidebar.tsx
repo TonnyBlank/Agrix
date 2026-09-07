@@ -10,6 +10,7 @@ import {
   ClipboardList,
   CreditCard,
   LayoutDashboard,
+  Layers,
   LogOut,
   LucideIcon,
   MessageSquare,
@@ -21,6 +22,7 @@ import {
   ShoppingCart,
   Sprout,
   Target,
+  Truck,
   Users,
   Zap,
 } from "lucide-react";
@@ -51,13 +53,16 @@ import { cn } from "@/lib/utils";
 
 const mainNav = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+  { title: "Services Hub", url: "/dashboard/services", icon: Layers },
   { title: "Performance", url: "/dashboard/analytics", icon: BarChart3 },
 ];
 
 const adminNav = [
   { title: "Overview", url: "/dashboard/admin", icon: ShieldCheck },
+  { title: "Logistics", url: "/dashboard/logistics", icon: Truck },
   { title: "Loan Offers", url: "/dashboard/admin/loans", icon: CreditCard },
   { title: "Loan Decisions", url: "/dashboard/admin/loan-decisions", icon: ClipboardList },
+  { title: "Risk & Credit", url: "/dashboard/admin/risk-credit", icon: ShieldCheck },
   { title: "Transactions", url: "/dashboard/admin/transactions", icon: ClipboardList },
   { title: "Disputes", url: "/dashboard/admin/disputes", icon: AlertTriangle },
   { title: "Company Review", url: "/dashboard/admin/companies", icon: Building2 },
@@ -75,6 +80,7 @@ const farmerNav = [
 
 const companyNav = [
   { title: "Company Hub", url: "/dashboard/company", icon: Building2 },
+  { title: "Services Hub", url: "/dashboard/services", icon: Layers },
   { title: "Products", url: "/dashboard/company/products", icon: Package },
   { title: "Partners", url: "/dashboard/company/partners", icon: Users },
   { title: "Orders", url: "/dashboard/company/orders", icon: ClipboardList },
@@ -83,6 +89,7 @@ const companyNav = [
   { title: "Cart", url: "/dashboard/cart", icon: ShoppingCart },
   { title: "Marketplace Orders", url: "/dashboard/orders", icon: ClipboardList },
   { title: "Company Profile", url: "/dashboard/company/settings", icon: Settings2 },
+  { title: "Risk & Credit", url: "/dashboard/risk-credit", icon: ShieldCheck },
   { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
 ];
 
@@ -91,6 +98,16 @@ const tradeNav = [
   { title: "Cart", url: "/dashboard/cart", icon: ShoppingCart },
   { title: "Messages", url: "/dashboard/messages", icon: MessageSquare },
   { title: "Orders", url: "/dashboard/orders", icon: ClipboardList },
+];
+
+const transporterNav = [
+  { title: "Dispatch Board", url: "/dashboard/logistics", icon: Truck },
+];
+
+const transporterSystemNav = [
+  { title: "Notifications", url: "/dashboard/notifications", icon: Bell },
+  { title: "Activity", url: "/dashboard/activity", icon: Radar },
+  { title: "Profile & Settings", url: "/dashboard/profile", icon: Settings2 },
 ];
 
 const systemNav = [
@@ -279,6 +296,24 @@ function GrowthNavGroup({ collapsed }: GrowthNavGroupProps) {
             )}
           </SidebarMenuItem>
 
+          <SidebarMenuItem>
+            <SidebarMenuButton asChild>
+              <NavLink
+                to="/dashboard/risk-credit"
+                onClick={() => {
+                  if (isMobile) {
+                    setOpenMobile(false);
+                  }
+                }}
+                className={navButtonClass(location.pathname === "/dashboard/risk-credit")}
+                activeClassName=""
+              >
+                <ShieldCheck className="h-4 w-4 shrink-0" />
+                {!collapsed && <span className="truncate">Risk & Credit</span>}
+              </NavLink>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+
           {showUpgradeLink ? (
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
@@ -311,6 +346,7 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const isAdmin = role === "admin";
   const isCompany = role === "company";
+  const isTransporter = role === "transporter";
   const profileHref = isCompany ? "/dashboard/company/settings" : "/dashboard/profile";
   const displayName =
     profile?.full_name ||
@@ -322,16 +358,20 @@ export function AppSidebar() {
       ? { label: "Company", cls: "bg-sky-500/18 text-sky-200" }
       : role === "admin"
         ? { label: "Admin", cls: "bg-sidebar-accent/70 text-sidebar-foreground" }
-        : isProRole(role)
-          ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
-          : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
+        : role === "transporter"
+          ? { label: "Transporter", cls: "bg-sky-500/18 text-sky-200" }
+          : isProRole(role)
+            ? { label: "Pro", cls: "bg-gold-500/18 text-gold-400" }
+            : { label: "Free", cls: "bg-emerald-500/18 text-emerald-200" };
 
   const dashboardHomeHref =
     role === "admin"
       ? "/dashboard/admin"
       : role === "company"
         ? "/dashboard/company"
-        : "/dashboard";
+        : role === "transporter"
+          ? "/dashboard/logistics"
+          : "/dashboard";
 
   const roleAwareMainNav = mainNav.map((item) =>
     item.url === "/dashboard" ? { ...item, url: dashboardHomeHref } : item,
@@ -379,6 +419,11 @@ export function AppSidebar() {
             <NavGroup label="Company Workspace" items={companyNav} collapsed={collapsed} />
             <NavGroup label="Insights" items={[{ title: "Performance", url: "/dashboard/analytics", icon: BarChart3 }]} collapsed={collapsed} />
             <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+          </>
+        ) : isTransporter ? (
+          <>
+            <NavGroup label="Logistics" items={transporterNav} collapsed={collapsed} />
+            <NavGroup label="System" items={transporterSystemNav} collapsed={collapsed} />
           </>
         ) : (
           <>

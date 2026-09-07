@@ -14,7 +14,7 @@ import requests
 
 from .http import HttpRequest, HttpResponse, JsonResponse
 
-APP_ROLES = ("farmer_free", "farmer_pro", "company", "admin")
+APP_ROLES = ("farmer_free", "farmer_pro", "company", "transporter", "admin")
 PAID_APP_ROLES = ("farmer_pro", "company")
 PLAN_DURATION_DAYS = 30
 LOAN_PRODUCT_TYPES = (
@@ -164,6 +164,70 @@ def write_user_notifications(
             source_user_id=source_user_id,
             metadata=metadata,
         )
+
+
+def send_sms(to_number: str, message: str) -> bool:
+    """Sends SMS using Africa's Talking API, falling back to mock outbox logging if not configured."""
+    clean_to = str(to_number or "").strip()
+    clean_msg = str(message or "").strip()
+    if not clean_to or not clean_msg:
+        return False
+
+    # Standardize Kenya numbers to E.164 if they start with 0
+    if clean_to.startswith("0") and len(clean_to) == 10:
+        clean_to = "+254" + clean_to[1:]
+
+    username = os.getenv("AFRICASTALKING_USERNAME")
+    api_key = os.getenv("AFRICASTALKING_API_KEY")
+    sender_id = os.getenv("AFRICASTALKING_FROM")
+
+    is_configured = bool(username and api_key and username.lower() != "sandbox" and "your" not in api_key.lower())
+
+    if not is_configured:
+        # Mock mode — write to outbox log for development inspection
+        log_entry = f"[{datetime.utcnow().isoformat()}Z] TO: {clean_to} | MSG: {clean_msg}\n"
+        try:
+            log_dir = os.path.dirname(os.path.abspath(__file__))
+            outbox_path = os.path.join(log_dir, "..", "sms_outbox.log")
+            with open(outbox_path, "a", encoding="utf-8") as f:
+                f.write(log_entry)
+        except Exception as e:
+            logger.warning("Failed to write mock SMS log: %s", e)
+
+        logger.info("Mock SMS Outbox: To %s: %s", clean_to, clean_msg)
+        return True
+
+    # Real Africa's Talking API call
+    url = "https://api.africastalking.com/version1/messaging"
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "apiKey": api_key,
+    }
+    data = {
+        "username": username,
+        "to": clean_to,
+        "message": clean_msg,
+    }
+    if sender_id:
+        data["from"] = sender_id
+
+    try:
+        response = requests.post(url, headers=headers, data=data, timeout=10)
+        response.raise_for_status()
+        res_json = response.json()
+        recipients = res_json.get("SMSMessageData", {}).get("Recipients", [])
+        if recipients and recipients[0].get("status") in {"Success", "UpRoute"}:
+            logger.info("SMS sent successfully to %s via Africa's Talking", clean_to)
+            return True
+        else:
+            status = recipients[0].get("status") if recipients else "Unknown"
+            logger.warning("Africa's Talking returned failure status for %s: %s", clean_to, status)
+            return False
+    except Exception as exc:
+        logger.error("Failed to send SMS to %s via Africa's Talking: %s", clean_to, exc)
+        return False
+
 
 
 def build_safe_storage_path(user_id: str, original_name: str) -> str:
@@ -591,8 +655,19 @@ def normalize_kenyan_phone(phone: str) -> str:
     raise ApiException("Phone number must be a valid Kenyan mobile number", 400)
 
 
+_mpesa_mock_logged = False
+
+
 def mpesa_mock_enabled() -> bool:
-    return os.getenv("MPESA_ENV") != "live" and os.getenv("MPESA_MOCK_MODE", "true").lower() != "false"
+    global _mpesa_mock_logged
+    is_mock = os.getenv("MPESA_ENV") != "live" and os.getenv("MPESA_MOCK_MODE", "true").lower() != "false"
+    if is_mock and not _mpesa_mock_logged:
+        _mpesa_mock_logged = True
+        logger.info(
+            "[M-Pesa] Running in MOCK MODE — no real Safaricom API calls will be made. "
+            "Set MPESA_ENV=live and MPESA_MOCK_MODE=false when going to production."
+        )
+    return is_mock
 
 
 def mpesa_live_mode_enabled() -> bool:
@@ -718,6 +793,12 @@ def mpesa_password(shortcode: str, passkey: str, timestamp: str) -> str:
 def initiate_stk_push(phone_number: str, amount: float, account_reference: str, transaction_desc: str) -> dict[str, Any]:
     shortcode = get_env("MPESA_SHORTCODE", "MPESA_SHORT_CODE", fallback="174379" if not mpesa_live_mode_enabled() else None)
     passkey = get_env("MPESA_PASSKEY", "MPESA_PASS_KEY", "MPESA_ONLINE_PASSKEY")
+    if mpesa_live_mode_enabled() and not passkey.strip():
+        raise ApiException(
+            "MPESA_PASSKEY is required in live mode. Set it in your .env file — "
+            "obtain it from the Safaricom Developer Portal under your app's Go Live credentials.",
+            500,
+        )
     callback_url = validate_mpesa_callback_url(get_env("MPESA_CALLBACK_URL", fallback="https://example.com/api/payments/mpesa/callback"))
     token = get_mpesa_access_token()
     timestamp = mpesa_timestamp()

@@ -46,8 +46,12 @@ function isFormData(value: unknown): value is FormData {
   return typeof FormData !== "undefined" && value instanceof FormData;
 }
 
-function isJsonBody(value: unknown) {
-  return value && typeof value === "object" && !isFormData(value);
+type ApiRequestInit = Omit<RequestInit, "body"> & {
+  body?: BodyInit | Record<string, unknown> | null;
+};
+
+function isJsonBody(value: ApiRequestInit["body"]): value is Record<string, unknown> {
+  return Object.prototype.toString.call(value) === "[object Object]" && !isFormData(value);
 }
 
 function ensureAuthCacheInitialized() {
@@ -83,7 +87,7 @@ async function getCachedSession() {
 
 export async function apiFetch<T>(
   path: string,
-  init: RequestInit = {},
+  init: ApiRequestInit = {},
   options: { auth?: boolean } = { auth: true },
 ): Promise<T> {
   const headers = new Headers(init.headers);
@@ -103,10 +107,9 @@ export async function apiFetch<T>(
     }
   }
 
-  let body = init.body;
+  const body: BodyInit | undefined = isJsonBody(init.body) ? JSON.stringify(init.body) : init.body ?? undefined;
   if (isJsonBody(init.body)) {
     headers.set("Content-Type", "application/json");
-    body = JSON.stringify(init.body);
   }
 
   let response: Response;

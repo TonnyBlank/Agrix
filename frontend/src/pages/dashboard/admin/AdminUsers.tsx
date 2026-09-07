@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Building2, Leaf, MapPin, Search, ShieldCheck, Sprout, Users } from "lucide-react";
+import { Building2, Leaf, MapPin, Search, ShieldCheck, Sprout, Truck, Users } from "lucide-react";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -166,6 +166,12 @@ export default function AdminUsers() {
         detail: "B2B suppliers and agricultural companies.",
       },
       {
+        role: "transporter" as const,
+        label: "Transporter",
+        icon: Truck,
+        detail: "Drivers and logistics partners handling delivery handovers.",
+      },
+      {
         role: "admin" as const,
         label: "Admin",
         icon: ShieldCheck,
@@ -204,7 +210,7 @@ export default function AdminUsers() {
           <p className="mt-3 text-xs text-muted-foreground">{filteredUsers.length} users found</p>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
           {roleSummary.map((item) => {
             const tone = adminTone(adminRoleTone(item.role));
             return (

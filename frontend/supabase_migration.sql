@@ -5,6 +5,8 @@
 -- It is the authoritative merged bootstrap from all project SQL files.
 -- ================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- ----------------------------------------------------------------
 -- Core enums, roles, profiles, auth hooks
 -- ----------------------------------------------------------------
@@ -18,11 +20,12 @@ BEGIN
       NULL;
     END;
   ELSE
-    CREATE TYPE public.app_role AS ENUM ('farmer_free', 'farmer_pro', 'company', 'admin');
+    CREATE TYPE public.app_role AS ENUM ('farmer_free', 'farmer_pro', 'company', 'transporter', 'admin');
   END IF;
 END $$;
 
 ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'company';
+ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'transporter';
 ALTER TYPE public.app_role ADD VALUE IF NOT EXISTS 'admin';
 
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -69,7 +72,7 @@ DROP CONSTRAINT IF EXISTS user_roles_role_check;
 
 ALTER TABLE public.user_roles
 ADD CONSTRAINT user_roles_role_check
-CHECK (role::text IN ('farmer_free', 'farmer_pro', 'company', 'admin'));
+CHECK (role::text IN ('farmer_free', 'farmer_pro', 'company', 'transporter', 'admin'));
 
 CREATE OR REPLACE FUNCTION public.has_role(_user_id uuid, _role public.app_role)
 RETURNS boolean
@@ -96,12 +99,13 @@ AS $$
   SELECT ur.role::public.app_role
   FROM public.user_roles ur
   WHERE ur.user_id = _user_id
-    AND ur.role::text IN ('admin', 'company', 'farmer_pro', 'farmer_free')
+    AND ur.role::text IN ('admin', 'transporter', 'company', 'farmer_pro', 'farmer_free')
   ORDER BY CASE ur.role::text
     WHEN 'admin' THEN 1
-    WHEN 'company' THEN 2
-    WHEN 'farmer_pro' THEN 3
-    WHEN 'farmer_free' THEN 4
+    WHEN 'transporter' THEN 2
+    WHEN 'company' THEN 3
+    WHEN 'farmer_pro' THEN 4
+    WHEN 'farmer_free' THEN 5
     ELSE 99
   END
   LIMIT 1
@@ -256,7 +260,8 @@ INSERT INTO public.feature_flags (feature_key, enabled_for, description) VALUES
   ('unlimited_listings', '{farmer_pro,company}', 'Unlimited product listings'),
   ('voice_interface', '{farmer_pro,company}', 'Voice assisted interface'),
   ('micro_loans', '{farmer_pro}', 'Micro-loan access'),
-  ('smart_logistics', '{farmer_pro,company}', 'Automated delivery matching'),
+  ('smart_logistics', ARRAY(SELECT role_value FROM unnest(enum_range(NULL::public.app_role)) AS role_value WHERE role_value::text IN ('farmer_pro', 'company', 'transporter')), 'Automated delivery matching'),
+  ('logistics_dispatch_portal', ARRAY(SELECT role_value FROM unnest(enum_range(NULL::public.app_role)) AS role_value WHERE role_value::text IN ('admin', 'transporter')), 'Transporter portal for accepting dispatches and managing delivery handovers'),
   ('contract_farming', '{company}', 'Contract farming module'),
   ('bulk_orders', '{company}', 'Bulk order management'),
   ('predictive_analytics', '{company}', 'AI supply and demand forecasting'),
@@ -268,6 +273,92 @@ INSERT INTO public.feature_flags (feature_key, enabled_for, description) VALUES
 ON CONFLICT (feature_key) DO UPDATE SET
   enabled_for = EXCLUDED.enabled_for,
   description = EXCLUDED.description;
+
+-- ----------------------------------------------------------------
+-- Admin audit trail
+-- ----------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.admin_audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  actor_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  action text NOT NULL,
+  entity_type text NOT NULL,
+  entity_id text,
+  summary text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+    CHECK (jsonb_typeof(metadata) = 'object'),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_created_at
+  ON public.admin_audit_logs(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_actor_created_at
+  ON public.admin_audit_logs(actor_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_admin_audit_logs_action_created_at
+  ON public.admin_audit_logs(action, created_at DESC);
+
+ALTER TABLE public.admin_audit_logs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "admin_audit_logs_admin_read" ON public.admin_audit_logs;
+CREATE POLICY "admin_audit_logs_admin_read"
+ON public.admin_audit_logs
+FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid()
+      AND ur.role::text = 'admin'
+  )
+);
+
+-- ----------------------------------------------------------------
+-- User notifications
+-- ----------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.user_notifications (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  source text NOT NULL DEFAULT 'system'
+    CHECK (source IN ('system', 'admin', 'company', 'user')),
+  source_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  title text NOT NULL,
+  message text NOT NULL,
+  priority text NOT NULL DEFAULT 'medium'
+    CHECK (priority IN ('high', 'medium', 'low')),
+  category text NOT NULL DEFAULT 'update'
+    CHECK (category IN ('action', 'update', 'info')),
+  entity_type text,
+  entity_id text,
+  action_url text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+    CHECK (jsonb_typeof(metadata) = 'object'),
+  read_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_created_at
+  ON public.user_notifications(user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_notifications_user_read_at
+  ON public.user_notifications(user_id, read_at);
+
+ALTER TABLE public.user_notifications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "user_notifications_owner_read" ON public.user_notifications;
+CREATE POLICY "user_notifications_owner_read"
+ON public.user_notifications
+FOR SELECT
+USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "user_notifications_owner_update" ON public.user_notifications;
+CREATE POLICY "user_notifications_owner_update"
+ON public.user_notifications
+FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 
 -- ----------------------------------------------------------------
 -- Marketplace, messaging, social, crop planning
@@ -367,11 +458,45 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS dispute_resolution_note text,
   ADD COLUMN IF NOT EXISTS dispute_deadline_at timestamptz;
 
+CREATE TABLE IF NOT EXISTS public.logistics_dispatches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  transporter_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'open'
+    CHECK (status IN ('open', 'assigned', 'accepted', 'picked_up', 'in_transit', 'delivered', 'cancelled')),
+  pickup_location text,
+  dropoff_location text,
+  vehicle_label text,
+  driver_phone text,
+  pickup_note text,
+  delivery_note text,
+  delivery_proof_photo_url text,
+  pickup_geo_lat numeric(10,7),
+  pickup_geo_lng numeric(10,7),
+  delivery_geo_lat numeric(10,7),
+  delivery_geo_lng numeric(10,7),
+  assigned_at timestamptz,
+  accepted_at timestamptz,
+  pickup_confirmed_at timestamptz,
+  delivered_at timestamptz,
+  created_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (order_id)
+);
+
+CREATE INDEX IF NOT EXISTS logistics_dispatches_status_created_idx
+  ON public.logistics_dispatches (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS logistics_dispatches_transporter_status_idx
+  ON public.logistics_dispatches (transporter_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS logistics_dispatches_order_idx
+  ON public.logistics_dispatches (order_id);
+
 CREATE TABLE IF NOT EXISTS public.cart_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   buyer_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
-  quantity numeric(10,2) NOT NULL CHECK (quantity > 0),
+  quantity numeric(10,2) NOT NULL CONSTRAINT cart_items_quantity_positive CHECK (quantity > 0),
   unit text NOT NULL,
   notes text,
   selected_for_checkout boolean NOT NULL DEFAULT true,
@@ -597,12 +722,24 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cart_items'::regclass
+      AND conname IN ('cart_items_quantity_positive', 'cart_items_quantity_positive_chk', 'cart_items_quantity_check')
+  ) THEN
+    ALTER TABLE public.cart_items
+      ADD CONSTRAINT cart_items_quantity_positive CHECK (quantity > 0);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'cart_items_quantity_positive'
+      AND conrelid = 'public.cart_items'::regclass
+  )
+  AND EXISTS (
+    SELECT 1 FROM pg_constraint
     WHERE conname = 'cart_items_quantity_positive_chk'
       AND conrelid = 'public.cart_items'::regclass
   ) THEN
-    ALTER TABLE public.cart_items
-      ADD CONSTRAINT cart_items_quantity_positive_chk
-      CHECK (quantity > 0);
+    ALTER TABLE public.cart_items DROP CONSTRAINT cart_items_quantity_positive_chk;
   END IF;
 
   IF NOT EXISTS (
@@ -714,6 +851,7 @@ CREATE TABLE IF NOT EXISTS public.id_verifications (
 
 ALTER TABLE public.products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.logistics_dispatches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.product_likes ENABLE ROW LEVEL SECURITY;
@@ -738,6 +876,53 @@ DROP POLICY IF EXISTS "orders_parties_update" ON public.orders;
 CREATE POLICY "orders_parties_read" ON public.orders FOR SELECT USING (buyer_id = auth.uid() OR farmer_id = auth.uid());
 CREATE POLICY "orders_buyer_insert" ON public.orders FOR INSERT WITH CHECK (buyer_id = auth.uid());
 CREATE POLICY "orders_parties_update" ON public.orders FOR UPDATE USING (buyer_id = auth.uid() OR farmer_id = auth.uid());
+
+DROP POLICY IF EXISTS "logistics_dispatches_admin_all" ON public.logistics_dispatches;
+CREATE POLICY "logistics_dispatches_admin_all"
+ON public.logistics_dispatches
+FOR ALL
+TO authenticated
+USING (public.has_role(auth.uid(), 'admin'::public.app_role))
+WITH CHECK (public.has_role(auth.uid(), 'admin'::public.app_role));
+
+DROP POLICY IF EXISTS "logistics_dispatches_transporter_read" ON public.logistics_dispatches;
+CREATE POLICY "logistics_dispatches_transporter_read"
+ON public.logistics_dispatches
+FOR SELECT
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid()
+      AND ur.role::text = 'transporter'
+  )
+  AND (status = 'open' OR transporter_id = auth.uid())
+);
+
+DROP POLICY IF EXISTS "logistics_dispatches_transporter_update" ON public.logistics_dispatches;
+CREATE POLICY "logistics_dispatches_transporter_update"
+ON public.logistics_dispatches
+FOR UPDATE
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid()
+      AND ur.role::text = 'transporter'
+  )
+  AND (status = 'open' OR transporter_id = auth.uid())
+)
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.user_roles ur
+    WHERE ur.user_id = auth.uid()
+      AND ur.role::text = 'transporter'
+  )
+  AND transporter_id = auth.uid()
+);
 
 DROP POLICY IF EXISTS "conv_participants" ON public.conversations;
 CREATE POLICY "conv_participants" ON public.conversations FOR ALL
@@ -808,6 +993,11 @@ FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 DROP TRIGGER IF EXISTS orders_updated_at ON public.orders;
 CREATE TRIGGER orders_updated_at
 BEFORE UPDATE ON public.orders
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_logistics_dispatches_updated_at ON public.logistics_dispatches;
+CREATE TRIGGER update_logistics_dispatches_updated_at
+BEFORE UPDATE ON public.logistics_dispatches
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS crop_events_updated_at ON public.crop_events;
@@ -1422,9 +1612,15 @@ CREATE TABLE IF NOT EXISTS public.micro_loan_repayments (
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   amount numeric(12,2) NOT NULL CHECK (amount > 0),
   payment_method text NOT NULL DEFAULT 'mpesa',
+  payment_status text NOT NULL DEFAULT 'paid' CHECK (payment_status IN ('initiated', 'pending_confirmation', 'paid', 'failed')),
+  checkout_request_id text,
+  merchant_request_id text,
+  payment_error text,
   payment_ref text,
   phone_number text,
   note text,
+  payment_verification_started_at timestamptz,
+  payment_verified_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -2510,3 +2706,325 @@ BEGIN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
   END IF;
 END $$;
+
+-- ================================================================
+-- Marketplace Constraints & Atomic Restock RPC (2026-07-06)
+-- ================================================================
+
+-- 1. cart_items: quantity must always be positive
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cart_items'::regclass
+      AND conname IN ('cart_items_quantity_positive', 'cart_items_quantity_positive_chk', 'cart_items_quantity_check')
+  ) THEN
+    ALTER TABLE public.cart_items
+      ADD CONSTRAINT cart_items_quantity_positive CHECK (quantity > 0);
+  END IF;
+END $$;
+
+-- 2. cart_items: one entry per buyer+product (enforces upsert semantics at DB level)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'cart_items_buyer_product_unique'
+      AND conrelid = 'public.cart_items'::regclass
+  ) THEN
+    ALTER TABLE public.cart_items
+      ADD CONSTRAINT cart_items_buyer_product_unique UNIQUE (buyer_id, product_id);
+  END IF;
+END $$;
+
+-- 3. products: stock cannot go below zero
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'products_stock_non_negative'
+      AND conrelid = 'public.products'::regclass
+  ) THEN
+    -- Clamp any existing negative values before adding constraint
+    UPDATE public.products SET stock = 0 WHERE stock < 0;
+    ALTER TABLE public.products
+      ADD CONSTRAINT products_stock_non_negative CHECK (stock >= 0);
+  END IF;
+END $$;
+
+-- 4. Atomic stock increment function used by backend for restocks
+-- Using stock + p_quantity avoids TOCTOU races on concurrent updates
+CREATE OR REPLACE FUNCTION public.increment_product_stock(
+  p_product_id uuid,
+  p_quantity numeric
+)
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  UPDATE public.products
+  SET
+    stock        = stock + p_quantity,
+    is_available = (stock + p_quantity) > 0,
+    updated_at   = now()
+  WHERE id = p_product_id;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.increment_product_stock(uuid, numeric) TO service_role;
+
+-- ================================================================
+-- County Offices & Refund Requests Tables (2026-07-06)
+-- ================================================================
+
+-- 1. County Offices table
+CREATE TABLE IF NOT EXISTS public.agrilink_county_offices (
+  county text PRIMARY KEY, -- lowercased county name (e.g. 'kisumu', 'nairobi')
+  office_name text NOT NULL,
+  physical_address text NOT NULL,
+  contact_phone text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Seed county offices with major agricultural/urban hubs in Kenya
+INSERT INTO public.agrilink_county_offices (county, office_name, physical_address, contact_phone) VALUES
+  ('kisumu', 'Kisumu County AgriLink Office', 'Jomo Kenyatta Highway, Prosperity House, 2nd Floor, Kisumu', '+254711000111'),
+  ('nairobi', 'Nairobi Central AgriLink Hub', 'Haile Selassie Avenue, Agriculture House, Ground Floor, Nairobi', '+254711000222'),
+  ('mombasa', 'Mombasa Port AgriLink Depot', 'Mombasa-Malindi Road, Shimanzi Sector 3, Mombasa', '+254711000333'),
+  ('nakuru', 'Rift Valley Regional AgriLink Center', 'Kenyatta Avenue, Nakuru County HQ Block B, Nakuru', '+254711000444'),
+  ('uasin gishu', 'Eldoret AgriLink Warehouse', 'Eldoret-Kitale Highway, National Cereals and Produce Board (NCPB) Compound, Eldoret', '+254711000555'),
+  ('kiambu', 'Kiambu County AgriLink Center', 'Kiambu Road, opposite Kiambu Level 4 Hospital, Kiambu', '+254711000666'),
+  ('meru', 'Meru AgriLink Hub', 'Meru-Maua Road, Ministry of Agriculture Building, Meru', '+254711000777'),
+  ('kakamega', 'Kakamega AgriLink Depot', 'Kakamega-Mumias Road, County Government Plaza, Kakamega', '+254711000888'),
+  ('nyeri', 'Mount Kenya Regional AgriLink Office', 'Nyeri-Nyahururu Road, Town Hall Extension, Nyeri', '+254711000999'),
+  ('machakos', 'Machakos AgriLink Hub', 'Konza Road, Machakos County HQ, Machakos', '+254711000000')
+ON CONFLICT (county) DO UPDATE SET
+  office_name = EXCLUDED.office_name,
+  physical_address = EXCLUDED.physical_address,
+  contact_phone = EXCLUDED.contact_phone;
+
+-- 2. Refund Requests table
+CREATE TABLE IF NOT EXISTS public.refund_requests (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid REFERENCES public.orders(id) ON DELETE CASCADE,
+  buyer_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
+  amount numeric(12,2) NOT NULL CHECK (amount > 0),
+  reason text NOT NULL,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'processed')),
+  admin_notes text,
+  mpesa_receipt text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_refund_requests_order_id ON public.refund_requests(order_id);
+CREATE INDEX IF NOT EXISTS idx_refund_requests_buyer_id ON public.refund_requests(buyer_id);
+CREATE INDEX IF NOT EXISTS idx_refund_requests_status ON public.refund_requests(status);
+
+-- Enable RLS
+ALTER TABLE public.agrilink_county_offices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.refund_requests ENABLE ROW LEVEL SECURITY;
+
+-- RLS policies for agrilink_county_offices (publicly readable)
+DROP POLICY IF EXISTS "county_offices_read_all" ON public.agrilink_county_offices;
+CREATE POLICY "county_offices_read_all" ON public.agrilink_county_offices FOR SELECT USING (true);
+
+-- RLS policies for refund_requests
+DROP POLICY IF EXISTS "refund_requests_buyer_read" ON public.refund_requests;
+CREATE POLICY "refund_requests_buyer_read" ON public.refund_requests FOR SELECT USING (buyer_id = auth.uid());
+
+DROP POLICY IF EXISTS "refund_requests_buyer_insert" ON public.refund_requests;
+CREATE POLICY "refund_requests_buyer_insert" ON public.refund_requests FOR INSERT WITH CHECK (buyer_id = auth.uid());
+
+-- Triggers for refund_requests updated_at
+DROP TRIGGER IF EXISTS update_refund_requests_updated_at ON public.refund_requests;
+CREATE TRIGGER update_refund_requests_updated_at
+BEFORE UPDATE ON public.refund_requests
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+-- 20260726190000_microfinance_production_foundation.sql
+-- Microfinance production foundation: score snapshots, arrears, documents, vouchers, and ledger records.
+ALTER TABLE public.micro_loan_applications
+  ADD COLUMN IF NOT EXISTS credit_score integer NOT NULL DEFAULT 0 CHECK (credit_score >= 0 AND credit_score <= 100),
+  ADD COLUMN IF NOT EXISTS credit_score_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS eligibility_explanation jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS due_date timestamptz,
+  ADD COLUMN IF NOT EXISTS grace_period_days integer NOT NULL DEFAULT 7 CHECK (grace_period_days >= 0),
+  ADD COLUMN IF NOT EXISTS days_late integer NOT NULL DEFAULT 0 CHECK (days_late >= 0),
+  ADD COLUMN IF NOT EXISTS late_fee_amount numeric NOT NULL DEFAULT 0 CHECK (late_fee_amount >= 0),
+  ADD COLUMN IF NOT EXISTS arrears_status text NOT NULL DEFAULT 'current'
+    CHECK (arrears_status IN ('current', 'grace', 'overdue', 'default_risk', 'repaid')),
+  ADD COLUMN IF NOT EXISTS next_payment_due_at timestamptz,
+  ADD COLUMN IF NOT EXISTS next_payment_amount numeric NOT NULL DEFAULT 0 CHECK (next_payment_amount >= 0),
+  ADD COLUMN IF NOT EXISTS repayment_status text NOT NULL DEFAULT 'not_started'
+    CHECK (repayment_status IN ('not_started', 'on_track', 'due', 'late', 'repaid')),
+  ADD COLUMN IF NOT EXISTS document_status text NOT NULL DEFAULT 'not_required'
+    CHECK (document_status IN ('not_required', 'required', 'submitted', 'verified', 'rejected', 'waived')),
+  ADD COLUMN IF NOT EXISTS voucher_status text NOT NULL DEFAULT 'not_applicable'
+    CHECK (voucher_status IN ('not_applicable', 'issued', 'redeemed', 'cancelled')),
+  ADD COLUMN IF NOT EXISTS ledger_status text NOT NULL DEFAULT 'open'
+    CHECK (ledger_status IN ('open', 'closed', 'written_off')),
+  ADD COLUMN IF NOT EXISTS lender_reference text;
+
+ALTER TABLE public.micro_loan_repayments
+  ADD COLUMN IF NOT EXISTS payment_status text NOT NULL DEFAULT 'paid'
+    CHECK (payment_status IN ('initiated', 'pending_confirmation', 'paid', 'failed')),
+  ADD COLUMN IF NOT EXISTS checkout_request_id text,
+  ADD COLUMN IF NOT EXISTS merchant_request_id text,
+  ADD COLUMN IF NOT EXISTS payment_error text,
+  ADD COLUMN IF NOT EXISTS verified_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS micro_loan_applications_due_status_idx
+ON public.micro_loan_applications (status, due_date, arrears_status);
+
+CREATE INDEX IF NOT EXISTS micro_loan_applications_credit_score_idx
+ON public.micro_loan_applications (credit_score DESC, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS micro_loan_repayments_checkout_idx
+ON public.micro_loan_repayments (checkout_request_id)
+WHERE checkout_request_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.micro_loan_documents (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loan_application_id uuid NOT NULL REFERENCES public.micro_loan_applications(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  document_type text NOT NULL,
+  document_name text NOT NULL,
+  document_url text,
+  status text NOT NULL DEFAULT 'submitted'
+    CHECK (status IN ('submitted', 'verified', 'rejected', 'waived')),
+  reviewer_note text,
+  reviewed_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS micro_loan_documents_loan_idx
+ON public.micro_loan_documents (loan_application_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS micro_loan_documents_user_idx
+ON public.micro_loan_documents (user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.micro_loan_voucher_redemptions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loan_application_id uuid NOT NULL REFERENCES public.micro_loan_applications(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  voucher_code text NOT NULL,
+  dealer_name text NOT NULL,
+  dealer_location text,
+  redeemed_value numeric NOT NULL DEFAULT 0 CHECK (redeemed_value >= 0),
+  status text NOT NULL DEFAULT 'redeemed'
+    CHECK (status IN ('redeemed', 'cancelled')),
+  note text,
+  redeemed_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS micro_loan_voucher_redemptions_loan_idx
+ON public.micro_loan_voucher_redemptions (loan_application_id, redeemed_at DESC);
+
+CREATE TABLE IF NOT EXISTS public.micro_loan_ledger_entries (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  loan_application_id uuid NOT NULL REFERENCES public.micro_loan_applications(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  entry_type text NOT NULL
+    CHECK (entry_type IN ('disbursement', 'repayment', 'interest_accrual', 'late_fee', 'voucher_redemption', 'adjustment', 'write_off')),
+  debit numeric NOT NULL DEFAULT 0 CHECK (debit >= 0),
+  credit numeric NOT NULL DEFAULT 0 CHECK (credit >= 0),
+  balance_after numeric NOT NULL DEFAULT 0 CHECK (balance_after >= 0),
+  reference text,
+  note text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS micro_loan_ledger_entries_loan_idx
+ON public.micro_loan_ledger_entries (loan_application_id, created_at ASC);
+
+ALTER TABLE public.micro_loan_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.micro_loan_voucher_redemptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.micro_loan_ledger_entries ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "micro_loan_documents_owner_read" ON public.micro_loan_documents;
+DROP POLICY IF EXISTS "micro_loan_documents_owner_insert" ON public.micro_loan_documents;
+CREATE POLICY "micro_loan_documents_owner_read" ON public.micro_loan_documents
+FOR SELECT USING (user_id = auth.uid());
+CREATE POLICY "micro_loan_documents_owner_insert" ON public.micro_loan_documents
+FOR INSERT WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "micro_loan_vouchers_owner_read" ON public.micro_loan_voucher_redemptions;
+CREATE POLICY "micro_loan_vouchers_owner_read" ON public.micro_loan_voucher_redemptions
+FOR SELECT USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "micro_loan_ledger_owner_read" ON public.micro_loan_ledger_entries;
+CREATE POLICY "micro_loan_ledger_owner_read" ON public.micro_loan_ledger_entries
+FOR SELECT USING (user_id = auth.uid());
+
+-- 20260727100000_risk_credit_records.sql
+-- Persist insurance and green-credit readiness records.
+CREATE TABLE IF NOT EXISTS public.risk_credit_records (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  record_type text NOT NULL
+    CHECK (record_type IN ('insurance', 'green_credit')),
+  title text NOT NULL CHECK (length(btrim(title)) > 0),
+  target_amount_text text,
+  enterprise text NOT NULL CHECK (length(btrim(enterprise)) > 0),
+  risk_focus text NOT NULL CHECK (length(btrim(risk_focus)) > 0),
+  evidence_notes text,
+  climate_practice text,
+  readiness_score integer NOT NULL DEFAULT 0 CHECK (readiness_score >= 0 AND readiness_score <= 100),
+  green_score integer NOT NULL DEFAULT 0 CHECK (green_score >= 0 AND green_score <= 100),
+  status text NOT NULL DEFAULT 'draft'
+    CHECK (status IN ('draft', 'ready', 'submitted', 'reviewing', 'approved', 'declined')),
+  partner_note text,
+  partner_reference text,
+  submitted_at timestamptz,
+  reviewed_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  reviewed_at timestamptz,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS risk_credit_records_user_created_idx
+ON public.risk_credit_records (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS risk_credit_records_status_submitted_idx
+ON public.risk_credit_records (status, submitted_at DESC NULLS LAST, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS risk_credit_records_record_type_idx
+ON public.risk_credit_records (record_type, created_at DESC);
+
+DROP TRIGGER IF EXISTS risk_credit_records_updated_at ON public.risk_credit_records;
+CREATE TRIGGER risk_credit_records_updated_at
+BEFORE UPDATE ON public.risk_credit_records
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+ALTER TABLE public.risk_credit_records ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "risk_credit_records_owner_read" ON public.risk_credit_records;
+CREATE POLICY "risk_credit_records_owner_read"
+ON public.risk_credit_records
+FOR SELECT
+USING (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "risk_credit_records_owner_insert" ON public.risk_credit_records;
+CREATE POLICY "risk_credit_records_owner_insert"
+ON public.risk_credit_records
+FOR INSERT
+WITH CHECK (user_id = auth.uid() AND status IN ('draft', 'ready'));
+
+DROP POLICY IF EXISTS "risk_credit_records_owner_update" ON public.risk_credit_records;
+CREATE POLICY "risk_credit_records_owner_update"
+ON public.risk_credit_records
+FOR UPDATE
+USING (user_id = auth.uid() AND status IN ('draft', 'ready'))
+WITH CHECK (user_id = auth.uid() AND status IN ('draft', 'ready'));
+
+DROP POLICY IF EXISTS "risk_credit_records_owner_delete" ON public.risk_credit_records;
+CREATE POLICY "risk_credit_records_owner_delete"
+ON public.risk_credit_records
+FOR DELETE
+USING (user_id = auth.uid() AND status IN ('draft', 'ready'));

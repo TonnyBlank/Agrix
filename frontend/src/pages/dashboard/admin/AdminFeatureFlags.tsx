@@ -96,7 +96,7 @@ export default function AdminFeatureFlags() {
 
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {roleCounts.map((item) => {
-            const tone = item.role === "admin" ? adminTone("rose") : item.role === "company" ? adminTone("emerald") : item.role === "farmer_pro" ? adminTone("emerald") : adminTone("amber");
+            const tone = item.role === "admin" ? adminTone("rose") : item.role === "transporter" ? adminTone("sky") : item.role === "company" ? adminTone("emerald") : item.role === "farmer_pro" ? adminTone("emerald") : adminTone("amber");
             return (
               <div key={item.role} className={`rounded-[1.3rem] border p-4 ${tone.card}`}>
                 <div className={`flex h-10 w-10 items-center justify-center rounded-[1rem] ${tone.iconWrap}`}>

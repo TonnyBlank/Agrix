@@ -33,6 +33,7 @@ export default function Profile() {
   const { verification, uploading, loading, uploadDocuments } = useIdVerification();
   const [searchParams] = useSearchParams();
   const status = verification?.status || "unverified";
+  const isVerificationPending = status === "pending" || status === "pending_review";
 
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -701,17 +702,17 @@ export default function Profile() {
                     className={`w-fit rounded-full border text-xs shadow-sm ${
                       status === "verified"
                         ? "border-[#4CAF50]/30 bg-[#4CAF50]/15 text-[#4CAF50]"
-                        : status === "pending"
+                        : isVerificationPending
                           ? "border-gold-500/30 bg-gold-500/15 text-gold-500"
                           : "border-destructive/30 bg-destructive/15 text-destructive"
                     }`}
                     variant="outline"
                   >
                     {status === "verified" && <CheckCircle className="mr-1 h-3 w-3" />}
-                    {status === "pending" && <Clock className="mr-1 h-3 w-3" />}
+                    {isVerificationPending && <Clock className="mr-1 h-3 w-3" />}
                     {status === "unverified" && "Unverified"}
                     {status === "verified" && "Verified"}
-                    {status === "pending" && "Pending Review"}
+                    {isVerificationPending && "Pending Review"}
                     {status === "rejected" && "Rejected"}
                   </Badge>
                 </div>

@@ -51,7 +51,7 @@ export default function MicroLoansSection() {
   }, []);
 
   return (
-    <section id="micro-loans" className="bg-muted/50 py-24 md:py-32">
+    <section id="micro-loans" className="scroll-mt-20 bg-muted/50 py-24 md:scroll-mt-24 md:py-32">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -80,7 +80,8 @@ export default function MicroLoansSection() {
           </h2>
           <p className="mx-auto mt-5 max-w-3xl text-lg leading-relaxed text-muted-foreground">
             AgriLink X connects marketplace trust, delivery history, and repayment behavior to create financing
-            access that fits real trade activity. Farmers get clearer loan pathways based on how they use the platform.
+            access that fits real trade activity. Farmers get clearer loan pathways, insurance visibility, and green
+            credit opportunities based on verified platform use.
           </p>
         </motion.div>
 

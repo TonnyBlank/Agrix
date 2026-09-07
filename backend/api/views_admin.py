@@ -7,6 +7,7 @@ from .common import (
     LOAN_PRODUCT_TYPES,
     admin_client,
     api_view,
+    build_loan_schedule,
     escape_csv,
     load_profiles_by_user_ids,
     method_not_allowed,
@@ -22,16 +23,19 @@ from .common import (
 from .http import HttpRequest, HttpResponse, JsonResponse
 from .views_core import attach_order_meta, release_order_payout
 from .views_loans import (
+    build_loan_operational_snapshot,
     compute_loan_eligibility,
+    fetch_loan_related_records,
     normalize_branch_visit_status,
     normalize_collateral_items,
     normalize_security_type,
     normalize_text_list,
+    paid_repayments,
 )
 
 
 BRANCH_DISBURSEMENT_READY_STATUSES = {"documents_received", "verified", "waived"}
-APP_ROLE_SET = {"farmer_free", "farmer_pro", "company", "admin"}
+APP_ROLE_SET = {"farmer_free", "farmer_pro", "company", "transporter", "admin"}
 
 
 def clean_optional_text(value) -> str | None:
@@ -232,9 +236,10 @@ def admin_user_summary(request: HttpRequest, user_id: str):
     roles = sorted({str(row.get("role") or "farmer_free") for row in role_rows or []})
     role_priority = {
         "admin": 1,
-        "company": 2,
-        "farmer_pro": 3,
-        "farmer_free": 4,
+        "transporter": 2,
+        "company": 3,
+        "farmer_pro": 4,
+        "farmer_free": 5,
     }
     primary_role = sorted(roles, key=lambda item: role_priority.get(item, 99))[0] if roles else "farmer_free"
 
@@ -828,16 +833,116 @@ def admin_loan_offer_detail(request: HttpRequest, offer_id: str):
 
 @api_view
 @require_auth
+def admin_loan_risk_summary(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+    ensure_admin(request)
+    admin = admin_client()
+    loans, _ = admin.select("micro_loan_applications", order="created_at.desc", limit=500)
+    related = fetch_loan_related_records(admin, [loan["id"] for loan in loans or []])
+    profiles = load_profiles_by_user_ids(admin, sorted({loan["user_id"] for loan in loans or []}), "user_id, full_name, county")
+
+    total_disbursed = 0.0
+    outstanding = 0.0
+    overdue_value = 0.0
+    par30_value = 0.0
+    overdue_count = 0
+    default_risk_count = 0
+    disbursed_count = 0
+    repaid_count = 0
+    county_rows: dict[str, dict[str, Any]] = {}
+    product_rows: dict[str, dict[str, Any]] = {}
+
+    for loan in loans or []:
+        repayments = related["repayments"].get(loan["id"], [])
+        snapshot = build_loan_operational_snapshot(
+            loan,
+            repayments,
+            voucher_redemptions=related["voucher_redemptions"].get(loan["id"], []),
+        )
+        schedule = build_loan_schedule(
+            loan.get("approved_amount"),
+            loan.get("requested_amount"),
+            loan.get("interest_rate"),
+            loan.get("repayment_days"),
+            loan.get("disbursed_at") or loan.get("reviewed_at") or loan.get("created_at"),
+            paid_repayments(repayments),
+        )
+        principal = float(schedule["summary"]["principal"])
+        balance = float(schedule["summary"]["remainingBalance"])
+        status = str(loan.get("status") or "")
+        if status in {"approved", "disbursed", "repaid"}:
+            total_disbursed += principal
+        if status in {"approved", "disbursed"}:
+            disbursed_count += 1
+            outstanding += balance
+        if status == "repaid":
+            repaid_count += 1
+        if snapshot["arrears_status"] in {"overdue", "default_risk"}:
+            overdue_count += 1
+            overdue_value += balance
+        if int(snapshot["days_late"] or 0) >= 30:
+            par30_value += balance
+        if snapshot["arrears_status"] == "default_risk":
+            default_risk_count += 1
+
+        profile = profiles.get(loan["user_id"]) or {}
+        county = str(loan.get("target_county") or profile.get("county") or "Unassigned").strip() or "Unassigned"
+        county_row = county_rows.setdefault(county, {"county": county, "loans": 0, "outstanding": 0.0, "overdue": 0.0, "defaultRisk": 0})
+        county_row["loans"] += 1
+        county_row["outstanding"] += balance
+        if snapshot["arrears_status"] in {"overdue", "default_risk"}:
+            county_row["overdue"] += balance
+        if snapshot["arrears_status"] == "default_risk":
+            county_row["defaultRisk"] += 1
+
+        product_type = str(loan.get("product_type") or "unknown")
+        product_row = product_rows.setdefault(product_type, {"productType": product_type, "loans": 0, "outstanding": 0.0, "overdue": 0.0})
+        product_row["loans"] += 1
+        product_row["outstanding"] += balance
+        if snapshot["arrears_status"] in {"overdue", "default_risk"}:
+            product_row["overdue"] += balance
+
+    return JsonResponse(
+        {
+            "loanCount": len(loans or []),
+            "disbursedCount": disbursed_count,
+            "repaidCount": repaid_count,
+            "overdueCount": overdue_count,
+            "defaultRiskCount": default_risk_count,
+            "totalDisbursed": round(total_disbursed, 2),
+            "outstanding": round(outstanding, 2),
+            "overdueValue": round(overdue_value, 2),
+            "par30Value": round(par30_value, 2),
+            "portfolioAtRiskRate": round((overdue_value / outstanding) * 100, 2) if outstanding else 0,
+            "par30Rate": round((par30_value / outstanding) * 100, 2) if outstanding else 0,
+            "byCounty": sorted(county_rows.values(), key=lambda item: item["outstanding"], reverse=True),
+            "byProduct": sorted(product_rows.values(), key=lambda item: item["outstanding"], reverse=True),
+        }
+    )
+
+
+@api_view
+@require_auth
 def admin_loans(request: HttpRequest):
     ensure_admin(request)
     admin = admin_client()
     if request.method == "GET":
         loans, _ = admin.select("micro_loan_applications", order="created_at.desc", limit=100)
         profiles = load_profiles_by_user_ids(admin, sorted({loan["user_id"] for loan in loans or []}), "user_id, full_name, county, phone")
+        related = fetch_loan_related_records(admin, [loan["id"] for loan in loans or []])
         return JsonResponse(
             [
                 {
                     **loan,
+                    **build_loan_operational_snapshot(
+                        loan,
+                        related["repayments"].get(loan["id"], []),
+                        voucher_redemptions=related["voucher_redemptions"].get(loan["id"], []),
+                    ),
+                    "credit_score": int(loan.get("credit_score") or 0),
+                    "credit_score_snapshot": loan.get("credit_score_snapshot") if isinstance(loan.get("credit_score_snapshot"), dict) else {},
+                    "eligibility_explanation": loan.get("eligibility_explanation") if isinstance(loan.get("eligibility_explanation"), list) else [],
                     "security_type": normalize_security_type(loan.get("security_type")),
                     "requires_branch_visit": bool(loan.get("requires_branch_visit")),
                     "branch_name": str(loan.get("branch_name") or "").strip() or None,
@@ -849,6 +954,10 @@ def admin_loans(request: HttpRequest):
                     "required_documents": normalize_text_list(loan.get("required_documents")),
                     "collateral_items": normalize_collateral_items(loan.get("collateral_items")),
                     "guarantors": loan.get("guarantors") if isinstance(loan.get("guarantors"), list) else [],
+                    "repayments": related["repayments"].get(loan["id"], []),
+                    "documents": related["documents"].get(loan["id"], []),
+                    "voucher_redemptions": related["voucher_redemptions"].get(loan["id"], []),
+                    "ledger_entries": related["ledger_entries"].get(loan["id"], []),
                     "profile": profiles.get(loan["user_id"]),
                 }
                 for loan in loans or []
@@ -913,6 +1022,11 @@ def admin_loans(request: HttpRequest):
             "collateral_types": collateral_types,
             "required_documents": required_documents,
             "collateral_items": collateral_items,
+            "document_status": "required" if (requires_branch_visit or security_type != "unsecured" or required_documents) else "not_required",
+            "voucher_status": "not_applicable",
+            "repayment_status": "on_track" if status == "disbursed" else "not_started",
+            "arrears_status": "current",
+            "ledger_status": "open",
             "disbursed_at": now_iso() if status == "disbursed" else None,
             "repaid_at": now_iso() if status == "repaid" else None,
             "reviewed_at": now_iso(),
@@ -1022,6 +1136,18 @@ def admin_loan_detail(request: HttpRequest, loan_id: str):
         if len(updates) > 1:
             updates["reviewed_at"] = now_iso()
         updated = admin.update("micro_loan_applications", updates, filters={"id": f"eq.{loan_id}"}, single=True)
+        related_after_update = fetch_loan_related_records(admin, [loan_id])
+        snapshot_updates = build_loan_operational_snapshot(
+            updated,
+            related_after_update["repayments"].get(loan_id, []),
+            voucher_redemptions=related_after_update["voucher_redemptions"].get(loan_id, []),
+        )
+        updated = admin.update(
+            "micro_loan_applications",
+            {**snapshot_updates, "updated_at": now_iso()},
+            filters={"id": f"eq.{loan_id}"},
+            single=True,
+        )
         write_admin_audit_event(
             admin,
             actor_user_id=request.user_id,

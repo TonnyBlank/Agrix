@@ -102,7 +102,7 @@ function LoanDecisionsTable({
               <td className="px-4 py-3.5">
                 <p className="text-sm text-foreground">Created {formatDateTime(loan.created_at)}</p>
                 <p className="text-xs text-muted-foreground">
-                  {loan.requires_branch_visit ? `${loan.branch_visit_status.replaceAll("_", " ")} - ` : ""}
+                  {loan.requires_branch_visit ? `${loan.branch_visit_status.replace(/_/g, " ")} - ` : ""}
                   {loan.note || "Borrower created this application from a published loan offer."}
                 </p>
               </td>
@@ -319,7 +319,7 @@ export default function AdminLoanDecisions() {
                 ) : null}
                 {selectedLoan.requires_branch_visit ? (
                   <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 font-semibold uppercase tracking-[0.14em] text-amber-800">
-                    {selectedLoan.branch_visit_status.replaceAll("_", " ")}
+                    {selectedLoan.branch_visit_status.replace(/_/g, " ")}
                   </span>
                 ) : null}
               </div>
