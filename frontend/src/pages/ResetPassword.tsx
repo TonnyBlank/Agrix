@@ -8,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(false);
   const navigate = useNavigate();
@@ -31,6 +32,17 @@ export default function ResetPasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (password.length < 6) {
+      toast({ title: "Password too short", description: "Use at least 6 characters.", variant: "destructive" });
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      toast({ title: "Passwords do not match", description: "Please make sure both password fields match.", variant: "destructive" });
+      return;
+    }
+
     setLoading(true);
     const { error } = await supabase.auth.updateUser({ password });
     setLoading(false);
@@ -54,11 +66,22 @@ export default function ResetPasswordPage() {
     <div className="min-h-screen flex items-center justify-center bg-background p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-md">
         <h1 className="text-2xl font-display font-bold text-foreground mb-1">Set new password</h1>
-        <p className="text-muted-foreground mb-8">Enter your new password below.</p>
+        <p className="text-muted-foreground mb-8">Enter and confirm your new password below.</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <Label htmlFor="password">New Password</Label>
             <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required />
+          </div>
+          <div>
+            <Label htmlFor="confirm-password">Confirm Password</Label>
+            <Input
+              id="confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              minLength={6}
+              required
+            />
           </div>
           <Button type="submit" className="w-full h-12" disabled={loading}>
             {loading ? "Updating..." : "Update Password"}

@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
-from api.views_core import _restock_failed_order
+from api.views_core import _get_gemini_api_key, _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -47,6 +47,18 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(status, "pending_confirmation")
         self.assertEqual(result_code, "")
         self.assertEqual(result_desc, "The service request is being processed")
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value"}, clear=False)
+    def test_gemini_key_accepts_real_value(self):
+        self.assertEqual(_get_gemini_api_key(), "real-key-value")
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "your-gemini-api-key"}, clear=False)
+    def test_gemini_key_rejects_placeholder_value(self):
+        self.assertIsNone(_get_gemini_api_key())
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "   "}, clear=False)
+    def test_gemini_key_rejects_blank_value(self):
+        self.assertIsNone(_get_gemini_api_key())
 
     def test_failed_payment_restock_is_idempotent(self):
         client = Mock()

@@ -1034,7 +1034,35 @@ def _build_scanner_result(file_name: str, content: bytes) -> dict[str, Any]:
 
 
 def _get_gemini_api_key() -> str | None:
-    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    def _is_placeholder(value: str | None) -> bool:
+        if value is None:
+            return True
+        cleaned = value.strip()
+        if not cleaned:
+            return True
+        lowered = cleaned.lower()
+        placeholder_words = (
+            "your-gemini-api-key",
+            "your-google-api-key",
+            "your_api_key",
+            "example",
+            "placeholder",
+            "changeme",
+            "replace-me",
+            "abc123",
+            "test-key",
+        )
+        if lowered in placeholder_words:
+            return True
+        if lowered.startswith("your-") or lowered.startswith("example"):
+            return True
+        return False
+
+    for env_name in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        value = os.getenv(env_name)
+        if value and not _is_placeholder(value):
+            return value.strip()
+    return None
 
 
 def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:

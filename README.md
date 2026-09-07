@@ -753,6 +753,8 @@ MPESA_CONSUMER_SECRET=
 MPESA_CALLBACK_URL=http://localhost:3001/api/payments/mpesa/callback
 ```
 
+For production, add the same backend secret to your hosting platform as `GEMINI_API_KEY` (and optionally `GOOGLE_API_KEY` if your project uses the Google AI alias), then redeploy the backend service so the AI scanner can use Gemini instead of the heuristic fallback.
+
 ### 3. Bootstrap Supabase
 
 Open the Supabase SQL Editor and run the full root script:
