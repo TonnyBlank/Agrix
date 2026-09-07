@@ -3,7 +3,9 @@
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
   "env": {
-    "VITE_API_URL": "https://agrix-bavp.onrender.com/api"
+    "VITE_API_URL": "https://agrix-bavp.onrender.com/api",
+    "VITE_SUPABASE_URL": "https://ubgntfyeagvwigvrqhgj.supabase.co",
+    "VITE_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_Uaw9q3pNdKMhe256rpWBMA_b8ZDqmFe"
   },
   "rewrites": [
     {
