@@ -2,10 +2,13 @@
 import { createClient, processLock } from '@supabase/supabase-js';
 import type { Database } from './types';
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_URL =
+  import.meta.env.VITE_SUPABASE_URL ||
+  'https://ubgntfyeagvwigvrqhgj.supabase.co';
 const SUPABASE_KEY =
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  import.meta.env.VITE_SUPABASE_ANON_KEY;
+  import.meta.env.VITE_SUPABASE_ANON_KEY ||
+  'sb_publishable_Uaw9q3pNdKMhe256rpWBMA_b8ZDqmFe';
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.warn(
@@ -17,8 +20,8 @@ if (!SUPABASE_URL || !SUPABASE_KEY) {
 // import { supabase } from "@/integrations/supabase/client";
 
 export const supabase = createClient<Database>(
-  SUPABASE_URL || 'https://placeholder.supabase.co',
-  SUPABASE_KEY || 'placeholder-anon-key',
+  SUPABASE_URL,
+  SUPABASE_KEY,
   {
     auth: {
       storage: localStorage,
