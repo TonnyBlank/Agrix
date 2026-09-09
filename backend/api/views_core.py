@@ -1097,7 +1097,7 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         model_names.append(SCANNER_GEMINI_FALLBACK_MODEL)
 
     body: dict[str, Any] | None = None
-    last_error: requests.RequestException | None = None
+    last_error: Exception | None = None
     for candidate_model in model_names:
         for attempt in range(SCANNER_GEMINI_MAX_ATTEMPTS):
             try:
@@ -1110,7 +1110,22 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
                 if response.status_code in SCANNER_GEMINI_RETRYABLE_STATUS_CODES:
                     response.raise_for_status()
                 response.raise_for_status()
-                body = response.json()
+                try:
+                    body = response.json()
+                except requests.exceptions.JSONDecodeError as exc:
+                    # Gemini can occasionally return an empty response body with a 200 status.
+                    # Treat that as transient instead of immediately giving up on the scan.
+                    last_error = exc
+                    body = None
+                    logger.warning(
+                        "Gemini returned a non-JSON crop analysis response; retrying model=%s attempt=%s",
+                        candidate_model,
+                        attempt + 1,
+                    )
+                    if attempt == SCANNER_GEMINI_MAX_ATTEMPTS - 1:
+                        break
+                    time.sleep(attempt + 1)
+                    continue
                 break
             except requests.RequestException as exc:
                 last_error = exc
@@ -1148,26 +1163,36 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         and isinstance(part.get("text"), str)
         and part["text"].strip()
     ]
-    # Gemini thinking models can send a thought part before the final JSON part.
-    text_part = (visible_text_parts or text_parts or [None])[-1]
-    if not text_part:
+    # Gemini thinking models can send thought or prose parts beside the final JSON part.
+    # Work backwards through the visible parts until a valid JSON object is found.
+    candidate_text_parts = visible_text_parts or text_parts
+    if not candidate_text_parts:
         raise ApiException("Gemini returned an empty crop analysis response.", 502)
 
-    response_text = text_part.strip()
-    if response_text.startswith("```"):
-        response_text = response_text.split("\n", 1)[-1]
-        if response_text.rstrip().endswith("```"):
-            response_text = response_text.rstrip()[:-3].rstrip()
+    parsed: dict[str, Any] | None = None
+    for text_part in reversed(candidate_text_parts):
+        response_text = text_part.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("\n", 1)[-1]
+            if response_text.rstrip().endswith("```"):
+                response_text = response_text.rstrip()[:-3].rstrip()
 
-    if not response_text.startswith("{"):
-        object_start = response_text.find("{")
-        object_end = response_text.rfind("}")
-        if object_start >= 0 and object_end > object_start:
-            response_text = response_text[object_start : object_end + 1]
+        if not response_text.startswith("{"):
+            object_start = response_text.find("{")
+            object_end = response_text.rfind("}")
+            if object_start >= 0 and object_end > object_start:
+                response_text = response_text[object_start : object_end + 1]
 
-    parsed = json.loads(response_text)
-    if not isinstance(parsed, dict):
-        raise ApiException("Gemini response format was invalid.", 502)
+        try:
+            candidate = json.loads(response_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            parsed = candidate
+            break
+
+    if parsed is None:
+        raise ApiException("Gemini returned a crop analysis without valid JSON.", 502)
 
     return _normalize_scanner_result(parsed, fallback)
 
@@ -1217,7 +1242,7 @@ def scanner_crops(request: HttpRequest):
         fallback_reason = "Gemini is not configured on the backend."
 
     if analysis_mode == "heuristic":
-        advisory = "AI analysis was unavailable, so this is a basic image-based estimate. "
+        advisory = "AI analysis was unavailable, so no diagnosis was made. "
         if fallback_reason:
             advisory += f"{fallback_reason} "
         advisory += "Please confirm it with an agronomist if symptoms worsen or spread quickly."

@@ -98,6 +98,33 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertIn("gemini-3.6-flash", post.call_args.args[0])
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch("api.views_core.time.sleep")
+    @patch("api.views_core.requests.post")
+    def test_gemini_scanner_retries_an_empty_json_response(self, post, _sleep):
+        malformed = Mock(status_code=200)
+        malformed.json.side_effect = requests.exceptions.JSONDecodeError("Expecting value", "", 0)
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"disease":"No disease detected","scientificName":"Not applicable","crop":"Tomato","confidence":88,"severity":"Low","spreadRisk":"Low","affectedArea":"0%","description":"No clear disease symptoms are visible.","treatment":"Continue normal crop monitoring.","organicAlternatives":[],"fertilizerRecommendations":[],"prevention":"Inspect the crop weekly."}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        post.side_effect = [malformed, success]
+
+        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+
+        self.assertEqual(result["disease"], "No disease detected")
+        self.assertEqual(post.call_count, 2)
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
     @patch("api.views_core.requests.post")
     def test_gemini_scanner_uses_json_after_thought_part(self, post):
         success = Mock(status_code=200)
