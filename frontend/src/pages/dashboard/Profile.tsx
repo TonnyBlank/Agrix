@@ -63,14 +63,21 @@ export default function Profile() {
     "personal" | "contact" | "payout" | "security" | "verification" | "settings"
   >("personal");
   const isAdmin = role === "admin";
-  const pageTitle = isAdmin ? "Admin Profile" : "My Profile";
-  const identityHeading = isAdmin ? "Admin account identity" : "Your name and profile photo for account identity.";
-  const operationsHeading = isAdmin ? "Admin workspace" : "Farm Operations";
+  const isTransporter = role === "transporter";
+  const pageTitle = isAdmin ? "Admin Profile" : isTransporter ? "Transporter Profile" : "My Profile";
+  const identityHeading = isAdmin
+    ? "Admin account identity"
+    : isTransporter
+      ? "Your name and profile photo for logistics account identity."
+      : "Your name and profile photo for account identity.";
+  const operationsHeading = isAdmin ? "Admin workspace" : isTransporter ? "Transport operations" : "Farm Operations";
   const operationsDescription = isAdmin
     ? "Use the admin dashboard for platform oversight, loan decisions, company reviews, and transaction monitoring."
-    : "Farm story, county, crops, irrigation, soil, storage, transport, and co-operative details are now managed from My Farm.";
-  const operationsCtaLabel = isAdmin ? "Open Admin Dashboard" : "Open My Farm";
-  const operationsHref = isAdmin ? "/dashboard/admin" : "/dashboard/farm";
+    : isTransporter
+      ? "Use the Dispatch Board to accept assigned shipments and manage delivery handovers."
+      : "Farm story, county, crops, irrigation, soil, storage, transport, and co-operative details are now managed from My Farm.";
+  const operationsCtaLabel = isAdmin ? "Open Admin Dashboard" : isTransporter ? "Open Dispatch Board" : "Open My Farm";
+  const operationsHref = isAdmin ? "/dashboard/admin" : isTransporter ? "/dashboard/logistics" : "/dashboard/farm";
   const contactDescription = isAdmin
     ? "How the platform can reach you. New phone numbers are only saved after OTP verification."
     : "How the platform can reach you. New phone numbers are only saved after OTP verification.";
@@ -504,6 +511,11 @@ export default function Profile() {
                       Admin account settings live here. Platform oversight tools, approvals, and reporting stay inside the{" "}
                       <Link to="/dashboard/admin" className="font-semibold underline underline-offset-2">Admin Dashboard</Link>.
                     </div>
+                  ) : isTransporter ? (
+                    <div className="rounded-[1.2rem] border border-sky-200/70 bg-sky-50/80 p-4 text-sm text-sky-900 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-100">
+                      Transport assignments and delivery handovers are managed from the{" "}
+                      <Link to="/dashboard/logistics" className="font-semibold underline underline-offset-2">Dispatch Board</Link>.
+                    </div>
                   ) : (
                     <div className="rounded-[1.2rem] border border-emerald-200/70 bg-emerald-50/70 p-4 text-sm text-emerald-900 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-100">
                       Farm details were moved out of My Profile. Use <Link to="/dashboard/farm" className="font-semibold underline underline-offset-2">My Farm</Link> for county, crops, irrigation, soil, storage, transport, and your farm story.
@@ -586,6 +598,11 @@ export default function Profile() {
                       <>
                         Need to return to oversight tools? Open the{" "}
                         <Link to="/dashboard/admin" className="font-semibold text-foreground underline underline-offset-2">Admin Dashboard</Link>.
+                      </>
+                    ) : isTransporter ? (
+                      <>
+                        Delivery assignments and status updates are managed from the{" "}
+                        <Link to="/dashboard/logistics" className="font-semibold text-foreground underline underline-offset-2">Dispatch Board</Link>.
                       </>
                     ) : (
                       <>
