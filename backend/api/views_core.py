@@ -882,6 +882,8 @@ def _restock_failed_order(client, order: dict[str, Any]) -> None:
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
+DELIVERY_PROOF_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MEDIA_MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024
 SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
 SCANNER_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
@@ -1510,8 +1512,13 @@ def _upload_media(request: HttpRequest, field_name: str, allowed_types: set[str]
         raise ApiException("No file uploaded", 400)
     if file.content_type not in allowed_types:
         raise ApiException(f"Unsupported {field_name} type", 400)
+    content = file.read()
+    if not content:
+        raise ApiException("Uploaded file is empty", 400)
+    if len(content) > MEDIA_MAX_UPLOAD_SIZE_BYTES:
+        raise ApiException("Uploaded file must be 8MB or less", 400)
     file_path = build_safe_storage_path(request.user_id, file.name)
-    request.supabase.upload_storage(bucket, file_path, file.read(), file.content_type or "application/octet-stream")
+    request.supabase.upload_storage(bucket, file_path, content, file.content_type or "application/octet-stream")
     return JsonResponse({"url": request.supabase.get_public_url(bucket, file_path)})
 
 
@@ -1912,6 +1919,41 @@ def order_cancel(request: HttpRequest, order_id: str):
     )
 
     return JsonResponse(attach_order_meta(request.supabase, [updated])[0])
+
+
+@api_view
+@require_auth
+def order_delivery_proof_image(request: HttpRequest, order_id: str):
+    if request.method != "POST":
+        return method_not_allowed(["POST"])
+
+    admin = admin_client()
+    order, _ = admin.select("orders", filters={"id": f"eq.{order_id}"}, single=True)
+    if not order:
+        raise ApiException("Order not found.", 404)
+    is_seller = str(order.get("farmer_id") or "") == request.user_id
+    is_assigned_transporter = _is_assigned_transporter_for_order(admin, order_id, request.user_id)
+    if not is_seller and not is_assigned_transporter:
+        raise ApiException("Only the seller or assigned transporter can upload delivery proof.", 403)
+    if order.get("status") == "cancelled":
+        raise ApiException("Cancelled orders cannot accept delivery proof.", 400)
+    if order.get("status") not in {"processing", "shipped", "delivered"}:
+        raise ApiException("Delivery proof can only be uploaded for active delivery orders.", 400)
+
+    image = request.FILES.get("image")
+    if not image:
+        raise ApiException("Choose a delivery proof image to upload.", 400)
+    if image.content_type not in DELIVERY_PROOF_ALLOWED_IMAGE_TYPES:
+        raise ApiException("Delivery proof must be a JPEG, PNG, or WebP image.", 400)
+    content = image.read()
+    if not content:
+        raise ApiException("Delivery proof image is empty.", 400)
+    if len(content) > MEDIA_MAX_UPLOAD_SIZE_BYTES:
+        raise ApiException("Delivery proof image must be 8MB or less.", 400)
+
+    file_path = f"delivery-proofs/{order_id}/{build_safe_storage_path(request.user_id, image.name)}"
+    admin.upload_storage("product-media", file_path, content, image.content_type or "application/octet-stream")
+    return JsonResponse({"url": admin.get_public_url("product-media", file_path)})
 
 
 @api_view

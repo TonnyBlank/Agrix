@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiFetch } from "@/lib/api";
 import { sanitizeDecimalInput, sanitizeDigits } from "@/lib/inputSanitizers";
+import { countyOptions } from "@/lib/kenyaLocations";
 import { AdminLoanOffer, adminTone, initialLoanOfferForm, LoanOfferFormState, LoanProductType, LoanSecurityType, LoanRole, LOAN_PRODUCT_TITLES, LOAN_SECURITY_OPTIONS, formatCount, formatDateTime, formatMoney } from "./shared";
+
+const loanTargetCountyOptions = ["All counties", ...countyOptions];
 
 function loanTypeTone(type: LoanProductType) {
   if (type === "equipment_top_up") return "bg-sky-500/10 text-sky-700 dark:text-sky-300";
@@ -60,7 +63,7 @@ function LoanOfferCard({
         <div>
           <p className="font-semibold text-foreground">{offer.product_title}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Visible only to qualified borrowers registered in {offer.target_county || "the configured county"}
+            Visible to qualified borrowers in {offer.target_county === "All counties" ? "all Kenyan counties" : offer.target_county || "the configured county"}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -104,7 +107,10 @@ function LoanOfferCard({
         </label>
         <input value={offer.branch_name ?? ""} onChange={(event) => onUpdate({ branch_name: event.target.value || null })} placeholder="Branch name" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground dark:bg-background/70" />
         <input value={offer.branch_location ?? ""} onChange={(event) => onUpdate({ branch_location: event.target.value || null })} placeholder="Branch location" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground dark:bg-background/70" />
-        <input value={offer.target_county ?? ""} onChange={(event) => onUpdate({ target_county: event.target.value || null })} placeholder="Target county" className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground md:col-span-2 dark:bg-background/70" />
+        <select value={offer.target_county ?? ""} onChange={(event) => onUpdate({ target_county: event.target.value || null })} className="h-10 rounded-xl border border-border bg-background px-3 text-sm text-foreground md:col-span-2 dark:bg-background/70">
+          <option value="" disabled>Select target county</option>
+          {loanTargetCountyOptions.map((county) => <option key={county} value={county}>{county}</option>)}
+        </select>
       </div>
       <textarea value={offer.note ?? ""} onChange={(event) => onUpdate({ note: event.target.value })} placeholder="Offer note" className="mt-3 min-h-[96px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground dark:bg-background/70" />
       <textarea value={offer.branch_instructions ?? ""} onChange={(event) => onUpdate({ branch_instructions: event.target.value || null })} placeholder="Branch instructions shown to borrower" className="mt-3 min-h-[88px] w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground dark:bg-background/70" />
@@ -170,7 +176,7 @@ export default function AdminLoans() {
           requires_branch_visit: loanOfferForm.requires_branch_visit,
           branch_name: loanOfferForm.branch_name.trim() || null,
           branch_location: loanOfferForm.branch_location.trim() || null,
-          target_county: loanOfferForm.target_county.trim() || null,
+          target_county: loanOfferForm.target_county || null,
           branch_instructions: loanOfferForm.branch_instructions.trim() || null,
           collateral_types: parseLineList(loanOfferForm.collateral_types_input),
           required_documents: parseLineList(loanOfferForm.required_documents_input),
@@ -279,7 +285,10 @@ export default function AdminLoans() {
             </label>
             <input value={loanOfferForm.branch_name} onChange={(event) => setLoanOfferForm((current) => ({ ...current, branch_name: event.target.value }))} placeholder="Branch name" className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70" />
             <input value={loanOfferForm.branch_location} onChange={(event) => setLoanOfferForm((current) => ({ ...current, branch_location: event.target.value }))} placeholder="Branch location" className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70" />
-            <input value={loanOfferForm.target_county} onChange={(event) => setLoanOfferForm((current) => ({ ...current, target_county: event.target.value }))} placeholder="Target county" className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70" />
+            <select value={loanOfferForm.target_county} onChange={(event) => setLoanOfferForm((current) => ({ ...current, target_county: event.target.value }))} className="h-11 rounded-xl border border-border bg-white px-3 text-sm text-foreground dark:bg-background/70">
+              <option value="" disabled>Select target county</option>
+              {loanTargetCountyOptions.map((county) => <option key={county} value={county}>{county}</option>)}
+            </select>
           </div>
           <textarea value={loanOfferForm.note} onChange={(event) => setLoanOfferForm((current) => ({ ...current, note: event.target.value }))} placeholder="Offer note shown to the borrower" className="mt-3 min-h-[110px] w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-foreground dark:bg-background/70" />
           <textarea value={loanOfferForm.branch_instructions} onChange={(event) => setLoanOfferForm((current) => ({ ...current, branch_instructions: event.target.value }))} placeholder="Branch instructions for title deeds, valuation forms, or physical document handover" className="mt-3 min-h-[110px] w-full rounded-xl border border-border bg-white px-3 py-2 text-sm text-foreground dark:bg-background/70" />

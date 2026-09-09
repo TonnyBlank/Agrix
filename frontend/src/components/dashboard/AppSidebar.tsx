@@ -31,7 +31,10 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import BrandWordmark from "@/components/branding/BrandWordmark";
 import { useAuth } from "@/hooks/useAuth";
+import { useCart } from "@/hooks/useCart";
+import { useMessages } from "@/hooks/useMessages";
 import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/api";
 import {
   Sidebar,
   SidebarContent,
@@ -128,6 +131,7 @@ type NavItem = {
   url: string;
   icon: LucideIcon;
   pro?: boolean;
+  count?: number;
 };
 
 function isProRole(role: string | null | undefined) {
@@ -197,6 +201,14 @@ function NavGroup({ label, items, collapsed }: NavGroupProps) {
                         PRO
                       </span>
                     )}
+                    {!collapsed && item.count ? (
+                      <span
+                        className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-100"
+                        aria-label={`${item.count} new ${item.title.toLowerCase()} item${item.count === 1 ? "" : "s"}`}
+                      >
+                        {item.count > 99 ? "99+" : item.count}
+                      </span>
+                    ) : null}
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -343,6 +355,9 @@ export function AppSidebar() {
   const { state, toggleSidebar } = useSidebar();
   const collapsed = state === "collapsed";
   const { signOut, profile, role, user } = useAuth();
+  const { items: cartItems } = useCart();
+  const { conversations } = useMessages(null);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const navigate = useNavigate();
   const isAdmin = role === "admin";
   const isCompany = role === "company";
@@ -376,6 +391,54 @@ export function AppSidebar() {
   const roleAwareMainNav = mainNav.map((item) =>
     item.url === "/dashboard" ? { ...item, url: dashboardHomeHref } : item,
   );
+  const cartQuantity = cartItems.reduce((total, item) => total + Math.max(0, Number(item.quantity) || 0), 0);
+  const unreadMessageCount = conversations.reduce((total, conversation) => {
+    const unread = conversation.participant_a === user?.id ? conversation.unread_a : conversation.unread_b;
+    return total + Math.max(0, Number(unread) || 0);
+  }, 0);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setUnreadNotificationCount(0);
+      return;
+    }
+
+    let active = true;
+    const loadUnreadNotifications = async () => {
+      try {
+        const notifications = await apiFetch<Array<{ id: string }>>("/notifications?unread_only=true&limit=200");
+        if (active) {
+          setUnreadNotificationCount(Array.isArray(notifications) ? notifications.length : 0);
+        }
+      } catch {
+        if (active) {
+          setUnreadNotificationCount(0);
+        }
+      }
+    };
+
+    void loadUnreadNotifications();
+    const refreshId = window.setInterval(() => void loadUnreadNotifications(), 30_000);
+    window.addEventListener("agrilink:notifications-changed", loadUnreadNotifications);
+    return () => {
+      active = false;
+      window.clearInterval(refreshId);
+      window.removeEventListener("agrilink:notifications-changed", loadUnreadNotifications);
+    };
+  }, [user?.id]);
+
+  const withLiveCounts = (items: NavItem[]) =>
+    items.map((item) => ({
+      ...item,
+      count:
+        item.url === "/dashboard/cart"
+          ? cartQuantity
+          : item.url === "/dashboard/messages"
+            ? unreadMessageCount
+            : item.url === "/dashboard/notifications"
+              ? unreadNotificationCount
+              : undefined,
+    }));
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border/55 bg-sidebar">
@@ -412,26 +475,26 @@ export function AppSidebar() {
         {isAdmin ? (
           <>
             <NavGroup label="Administration" items={adminNav} collapsed={collapsed} />
-            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+            <NavGroup label="System" items={withLiveCounts(systemNav)} collapsed={collapsed} />
           </>
         ) : isCompany ? (
           <>
-            <NavGroup label="Company Workspace" items={companyNav} collapsed={collapsed} />
+            <NavGroup label="Company Workspace" items={withLiveCounts(companyNav)} collapsed={collapsed} />
             <NavGroup label="Insights" items={[{ title: "Performance", url: "/dashboard/analytics", icon: BarChart3 }]} collapsed={collapsed} />
-            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+            <NavGroup label="System" items={withLiveCounts(systemNav)} collapsed={collapsed} />
           </>
         ) : isTransporter ? (
           <>
             <NavGroup label="Logistics" items={transporterNav} collapsed={collapsed} />
-            <NavGroup label="System" items={transporterSystemNav} collapsed={collapsed} />
+            <NavGroup label="System" items={withLiveCounts(transporterSystemNav)} collapsed={collapsed} />
           </>
         ) : (
           <>
             <NavGroup label="Command Center" items={roleAwareMainNav} collapsed={collapsed} />
             <NavGroup label="Farm Operations" items={farmerNav} collapsed={collapsed} />
-            <NavGroup label="Trade" items={tradeNav} collapsed={collapsed} />
+            <NavGroup label="Trade" items={withLiveCounts(tradeNav)} collapsed={collapsed} />
             <NavGroup label="Intelligence" items={intelligenceNav} collapsed={collapsed} />
-            <NavGroup label="System" items={systemNav} collapsed={collapsed} />
+            <NavGroup label="System" items={withLiveCounts(systemNav)} collapsed={collapsed} />
             <GrowthNavGroup collapsed={collapsed} />
           </>
         )}

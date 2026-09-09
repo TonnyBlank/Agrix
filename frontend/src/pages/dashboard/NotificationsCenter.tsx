@@ -499,6 +499,7 @@ export default function NotificationsCenter() {
       await apiFetch<{ updated: number }>("/notifications/read-all", { method: "PATCH" });
       const now = new Date().toISOString();
       setServerNotifications((prev) => prev.map((item) => (item.read_at ? item : { ...item, read_at: now })));
+      window.dispatchEvent(new CustomEvent("agrilink:notifications-changed"));
     } finally {
       setMarkingAllRead(false);
     }

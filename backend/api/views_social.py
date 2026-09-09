@@ -4,7 +4,7 @@ from datetime import datetime
 
 import requests
 
-from .common import ApiException, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
+from .common import ApiException, admin_client, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
 from .http import HttpRequest, HttpResponse, JsonResponse
 
 
@@ -295,3 +295,18 @@ def notifications_mark_all_read(request: HttpRequest):
         filters={"user_id": f"eq.{request.user_id}", "read_at": "is.null"},
     )
     return JsonResponse({"updated": len(updated or [])})
+
+
+@api_view
+@require_auth
+def activity_hidden_events(request: HttpRequest):
+    if request.method != "GET":
+        return method_not_allowed(["GET"])
+
+    rows, _ = admin_client().select(
+        "activity_event_moderation",
+        select="event_key",
+        order="hidden_at.desc",
+        limit=500,
+    )
+    return JsonResponse({"event_keys": [row["event_key"] for row in rows or [] if row.get("event_key")]})

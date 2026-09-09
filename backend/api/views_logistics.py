@@ -300,6 +300,8 @@ def logistics_shipment_status(request: HttpRequest, dispatch_id: str):
     order = _fetch_order(admin, str(dispatch.get("order_id") or ""))
     if order.get("status") == "cancelled":
         raise ApiException("Cancelled orders cannot be moved through logistics.", 400)
+    if next_status == "delivered" and role == "transporter" and not _clean_optional_text(body.get("delivery_proof_photo_url")):
+        raise ApiException("Upload delivery proof before marking this dispatch delivered.", 400)
 
     now_label = now_iso()
     updates = _normalize_dispatch_payload(body)

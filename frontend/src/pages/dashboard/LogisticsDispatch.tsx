@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Clock3, LoaderCircle, LucideIcon, MapPin, PackageCheck, RefreshCw, ShieldCheck, Truck } from "lucide-react";
+import { CheckCircle2, Clock3, ImagePlus, LoaderCircle, LucideIcon, MapPin, PackageCheck, RefreshCw, ShieldCheck, Truck } from "lucide-react";
 import { toast } from "sonner";
 
 import DashboardShell from "@/components/dashboard/DashboardShell";
@@ -183,6 +183,32 @@ export default function LogisticsDispatch() {
     });
   };
 
+  const uploadDeliveryProof = async (dispatch: LogisticsDispatch, file: File) => {
+    if (!dispatch.order_id) {
+      toast.error("This dispatch is missing its order reference.");
+      return;
+    }
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+      toast.error("Choose a JPEG, PNG, or WebP photo.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error("Delivery proof photos must be 8MB or less.");
+      return;
+    }
+
+    await runAction(`proof-${dispatch.id}`, async () => {
+      const formData = new FormData();
+      formData.append("image", file);
+      const response = await apiFetch<{ url: string }>(`/orders/${dispatch.order_id}/delivery-proof-image`, {
+        method: "POST",
+        body: formData,
+      });
+      setProofById((current) => ({ ...current, [dispatch.id]: response.url }));
+      toast.success("Delivery proof photo uploaded.");
+    });
+  };
+
   return (
     <DashboardShell title="Logistics">
       <div className="space-y-6">
@@ -288,7 +314,36 @@ export default function LogisticsDispatch() {
                   </div>
 
                   <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                    <Input value={proofValue} onChange={(event) => setProofById((current) => ({ ...current, [dispatch.id]: event.target.value }))} placeholder="Delivery proof photo URL" />
+                    <div className="rounded-md border border-border bg-background/70 px-3 py-2.5">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">Delivery proof</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {proofValue ? (
+                          <a href={proofValue} target="_blank" rel="noreferrer" className="text-sm font-semibold text-primary underline underline-offset-2">
+                            View uploaded photo
+                          </a>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">Photo required before delivery.</span>
+                        )}
+                        {!isAdmin ? (
+                          <label className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border border-input bg-background px-3 text-xs font-semibold text-foreground transition-colors hover:bg-muted">
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              capture="environment"
+                              className="sr-only"
+                              disabled={busyKey === `proof-${dispatch.id}`}
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                event.currentTarget.value = "";
+                                if (file) void uploadDeliveryProof(dispatch, file);
+                              }}
+                            />
+                            {busyKey === `proof-${dispatch.id}` ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                            {proofValue ? "Replace photo" : "Upload photo"}
+                          </label>
+                        ) : null}
+                      </div>
+                    </div>
                     <Input value={otpById[dispatch.id] ?? ""} onChange={(event) => setOtpById((current) => ({ ...current, [dispatch.id]: event.target.value }))} placeholder="Buyer handover OTP" />
                     <Textarea
                       value={noteValue}
@@ -306,17 +361,23 @@ export default function LogisticsDispatch() {
                         variant={status === "delivered" ? "default" : "outline"}
                         className="rounded-md"
                         disabled={busyKey === `${status}-${dispatch.id}`}
-                        onClick={() => void runAction(`${status}-${dispatch.id}`, async () => {
-                          await apiFetch(`/logistics/shipments/${dispatch.id}/status`, {
-                            method: "PATCH",
-                            body: {
-                              status,
-                              delivery_proof_photo_url: proofValue.trim() || null,
-                              delivery_note: noteValue.trim() || null,
-                            },
+                        onClick={() => {
+                          if (status === "delivered" && !proofValue.trim()) {
+                            toast.error("Upload a delivery proof photo before marking this dispatch delivered.");
+                            return;
+                          }
+                          void runAction(`${status}-${dispatch.id}`, async () => {
+                            await apiFetch(`/logistics/shipments/${dispatch.id}/status`, {
+                              method: "PATCH",
+                              body: {
+                                status,
+                                delivery_proof_photo_url: proofValue.trim() || null,
+                                delivery_note: noteValue.trim() || null,
+                              },
+                            });
+                            toast.success(`Dispatch marked ${statusLabels[status].toLowerCase()}.`);
                           });
-                          toast.success(`Dispatch marked ${statusLabels[status].toLowerCase()}.`);
-                        })}
+                        }}
                       >
                         {busyKey === `${status}-${dispatch.id}` ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <PackageCheck className="h-4 w-4" />}
                         {statusLabels[status]}

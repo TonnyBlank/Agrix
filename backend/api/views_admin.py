@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import re
 
 from .common import (
     ApiException,
@@ -36,6 +37,15 @@ from .views_loans import (
 
 BRANCH_DISBURSEMENT_READY_STATUSES = {"documents_received", "verified", "waived"}
 APP_ROLE_SET = {"farmer_free", "farmer_pro", "company", "transporter", "admin"}
+LOAN_TARGET_COUNTIES = {
+    "All counties",
+    "Baringo", "Bomet", "Bungoma", "Busia", "Elgeyo-Marakwet", "Embu", "Garissa", "Homa Bay", "Isiolo", "Kajiado",
+    "Kakamega", "Kericho", "Kiambu", "Kilifi", "Kirinyaga", "Kisii", "Kisumu", "Kitui", "Kwale", "Laikipia", "Lamu",
+    "Machakos", "Makueni", "Mandera", "Marsabit", "Meru", "Migori", "Mombasa", "Murang'a", "Nairobi", "Nakuru", "Nandi",
+    "Narok", "Nyamira", "Nyandarua", "Nyeri", "Samburu", "Siaya", "Taita-Taveta", "Tana River", "Tharaka-Nithi",
+    "Trans-Nzoia", "Turkana", "Uasin Gishu", "Vihiga", "Wajir", "West Pokot",
+}
+LOAN_TARGET_COUNTIES_BY_NORMALIZED_NAME = {county.casefold(): county for county in LOAN_TARGET_COUNTIES}
 
 
 def clean_optional_text(value) -> str | None:
@@ -47,6 +57,14 @@ def require_text(value, label: str) -> str:
     if not cleaned:
         raise ApiException(f"{label} is required.", 400)
     return cleaned
+
+
+def normalize_loan_target_county(value) -> str:
+    selected = require_text(value, "Target county")
+    county = LOAN_TARGET_COUNTIES_BY_NORMALIZED_NAME.get(selected.casefold())
+    if not county:
+        raise ApiException("Select a valid Kenyan target county.", 400)
+    return county
 
 
 def ensure_admin(request: HttpRequest):
@@ -692,7 +710,7 @@ def admin_loan_offers(request: HttpRequest):
         raise ApiException("Maximum offer amount must be greater than zero.", 400)
     branch_name = require_text(body.get("branch_name"), "Branch name")
     branch_location = require_text(body.get("branch_location"), "Branch location")
-    target_county = require_text(body.get("target_county"), "Target county")
+    target_county = normalize_loan_target_county(body.get("target_county"))
     security_type = normalize_security_type(body.get("security_type"))
     requires_branch_visit = bool(body.get("requires_branch_visit"))
     collateral_types = normalize_text_list(body.get("collateral_types"))
@@ -780,7 +798,7 @@ def admin_loan_offer_detail(request: HttpRequest, offer_id: str):
         if "branch_location" in body:
             updates["branch_location"] = clean_optional_text(body.get("branch_location"))
         if "target_county" in body:
-            updates["target_county"] = clean_optional_text(body.get("target_county"))
+            updates["target_county"] = normalize_loan_target_county(body.get("target_county"))
         if "branch_instructions" in body:
             updates["branch_instructions"] = str(body.get("branch_instructions") or "").strip() or None
         if "collateral_types" in body:
@@ -1334,6 +1352,55 @@ def admin_audit_logs(request: HttpRequest):
         actor = profiles.get(row.get("actor_user_id"), {}) if row.get("actor_user_id") else {}
         rows.append({**row, "actor_profile": actor or None})
     return JsonResponse(rows, safe=False)
+
+
+@api_view
+@require_auth
+def admin_activity_event_detail(request: HttpRequest, event_key: str):
+    ensure_admin(request)
+    if len(event_key) > 200 or not re.fullmatch(r"[A-Za-z0-9_-]+", event_key):
+        raise ApiException("Invalid activity event.", 400)
+
+    admin = admin_client()
+    if request.method == "POST":
+        body = parse_json_body(request)
+        reason = clean_optional_text(body.get("reason"))
+        if reason and len(reason) > 500:
+            raise ApiException("Removal reason must be 500 characters or less.", 400)
+        admin.insert(
+            "activity_event_moderation",
+            {
+                "event_key": event_key,
+                "hidden_by_user_id": request.user_id,
+                "reason": reason,
+                "hidden_at": now_iso(),
+            },
+            single=True,
+            upsert=True,
+            on_conflict="event_key",
+        )
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.activity.removed_from_timeline",
+            entity_type="activity_event",
+            entity_id=event_key,
+            summary="Removed an activity item from the shared timeline.",
+            metadata={"reason": reason},
+        )
+        return JsonResponse({"event_key": event_key, "hidden": True})
+    if request.method == "DELETE":
+        admin.delete("activity_event_moderation", filters={"event_key": f"eq.{event_key}"})
+        write_admin_audit_event(
+            admin,
+            actor_user_id=request.user_id,
+            action="admin.activity.restored_to_timeline",
+            entity_type="activity_event",
+            entity_id=event_key,
+            summary="Restored an activity item to the shared timeline.",
+        )
+        return HttpResponse(status=204)
+    return method_not_allowed(["POST", "DELETE"])
 
 
 @api_view

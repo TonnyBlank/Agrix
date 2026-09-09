@@ -144,6 +144,14 @@ def resolve_offer_target_county(offer: dict[str, Any]) -> str | None:
     return clean_optional_text(offer.get("target_county")) or clean_optional_text(offer.get("branch_location"))
 
 
+def offer_matches_borrower_county(offer: dict[str, Any], borrower_county: str | None) -> bool:
+    target_county = normalize_county_text(resolve_offer_target_county(offer))
+    normalized_borrower_county = normalize_county_text(borrower_county)
+    if not normalized_borrower_county or not target_county:
+        return False
+    return target_county in {"all counties", "all", normalized_borrower_county}
+
+
 def loan_requires_manual_review(security_type: str, requires_branch_visit: bool) -> bool:
     return requires_branch_visit or security_type != "unsecured"
 
@@ -663,7 +671,7 @@ def micro_loan_offers(request: HttpRequest):
     matching_offers = [
         offer
         for offer in offers or []
-        if borrower_county and normalize_county_text(resolve_offer_target_county(offer)) == borrower_county
+        if offer_matches_borrower_county(offer, borrower_county)
     ]
     verification, _ = request.supabase.select("id_verifications", select="status", filters={"user_id": f"eq.{request.user_id}"}, single=True)
     eligibility_orders = fetch_eligibility_orders(request.supabase, role, request.user_id)
@@ -742,7 +750,7 @@ def micro_loan_applications(request: HttpRequest):
         normalized_target_county = normalize_county_text(target_county)
         if not normalized_target_county:
             raise ApiException("This loan offer is missing a target county. Ask admin to update it first.", 400)
-        if normalized_target_county != normalized_borrower_county:
+        if normalized_target_county not in {"all counties", "all", normalized_borrower_county}:
             raise ApiException(f"This loan is only available to borrowers registered in {target_county}.", 403)
         max_allowed = min(available_amount, float(offer.get("max_amount") or 0))
         security_type = normalize_security_type(offer.get("security_type"))

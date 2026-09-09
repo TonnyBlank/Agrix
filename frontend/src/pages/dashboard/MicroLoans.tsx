@@ -619,7 +619,8 @@ async function loadLoanOffersFromSupabase(role: BorrowerRole, availableAmount: n
   return (data ?? [])
     .filter((offer) => {
       const targetCounty = offer.target_county ?? offer.branch_location ?? null;
-      return Boolean(normalizedBorrowerCounty) && normalizeCountyText(targetCounty) === normalizedBorrowerCounty;
+      const normalizedTargetCounty = normalizeCountyText(targetCounty);
+      return Boolean(normalizedBorrowerCounty) && ["all counties", "all", normalizedBorrowerCounty].includes(normalizedTargetCounty ?? "");
     })
     .map((offer) => {
     const available = Math.min(Math.max(0, availableAmount), Number(offer.max_amount ?? 0));

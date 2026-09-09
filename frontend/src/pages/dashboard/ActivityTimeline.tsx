@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { BellRing, Building2, ClipboardList, CreditCard, Package, Search, ShieldCheck, ShoppingCart, Users } from "lucide-react";
+import { BellRing, Building2, ClipboardList, CreditCard, Package, Search, ShieldCheck, ShoppingCart, Trash2, Users } from "lucide-react";
 
 import DashboardShell from "@/components/dashboard/DashboardShell";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/hooks/useAuth";
 import { useOrders } from "@/hooks/useOrders";
@@ -116,6 +117,29 @@ export default function ActivityTimeline() {
     users: [],
   });
   const [loadingExtra, setLoadingExtra] = useState(false);
+  const [hiddenEventIds, setHiddenEventIds] = useState<Set<string>>(new Set());
+  const [removingEventId, setRemovingEventId] = useState<string | null>(null);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    apiFetch<{ event_keys?: string[] }>("/activity/hidden-events")
+      .then((response) => {
+        if (active) {
+          setHiddenEventIds(new Set(response.event_keys ?? []));
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setHiddenEventIds(new Set());
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -260,9 +284,28 @@ export default function ActivityTimeline() {
   }, [adminState.companies, adminState.users, buyingOrders, companyState.orders, companyState.partners, companyState.products, companyState.requests, products, role, sellingOrders]);
 
   const filteredEvents = events.filter((event) => {
+    if (hiddenEventIds.has(event.id)) {
+      return false;
+    }
     const haystack = `${event.title} ${event.detail} ${event.lane}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   });
+
+  const removeFromTimeline = async (event: TimelineEvent) => {
+    setRemovingEventId(event.id);
+    setModerationError(null);
+    try {
+      await apiFetch(`/admin/activity-events/${encodeURIComponent(event.id)}`, {
+        method: "POST",
+        body: { reason: "Removed by an administrator from the activity timeline." },
+      });
+      setHiddenEventIds((current) => new Set([...current, event.id]));
+    } catch (error) {
+      setModerationError(error instanceof Error ? error.message : "Could not remove the activity item.");
+    } finally {
+      setRemovingEventId(null);
+    }
+  };
 
   return (
     <DashboardShell title="Activity">
@@ -287,6 +330,8 @@ export default function ActivityTimeline() {
           </div>
         </div>
       </section>
+
+      {moderationError ? <p className="mb-4 text-sm text-red-700">{moderationError}</p> : null}
 
       {loadingExtra || ordersLoading || productsLoading ? (
         <div className="rounded-[1.3rem] border border-border bg-card p-5 text-sm text-muted-foreground">Loading timeline...</div>
@@ -313,7 +358,22 @@ export default function ActivityTimeline() {
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">{event.detail}</p>
                   </div>
                 </div>
-                <div className="text-sm text-muted-foreground">{formatRelative(event.at)}</div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <div className="text-sm text-muted-foreground">{formatRelative(event.at)}</div>
+                  {role === "admin" ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-lg text-red-700 hover:bg-red-50 hover:text-red-800"
+                      disabled={removingEventId === event.id}
+                      onClick={() => void removeFromTimeline(event)}
+                    >
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </div>
           ))}

@@ -24,6 +24,7 @@ urlpatterns = [
     path("api/orders/<str:order_id>/status", legacy_view(views_core.order_status)),
     path("api/orders/<str:order_id>/cancel", legacy_view(views_core.order_cancel)),
     path("api/orders/<str:order_id>/refund-request", legacy_view(views_core.order_refund_request)),
+    path("api/orders/<str:order_id>/delivery-proof-image", legacy_view(views_core.order_delivery_proof_image)),
     path("api/orders/<str:order_id>/delivery-proof", legacy_view(views_core.order_delivery_proof)),
     path("api/orders/<str:order_id>/delivery-otp/request", legacy_view(views_core.order_delivery_otp_request)),
     path("api/orders/<str:order_id>/delivery-otp/verify", legacy_view(views_core.order_delivery_otp_verify)),
@@ -75,6 +76,7 @@ urlpatterns = [
     path("api/notifications", legacy_view(views_social.notifications_root)),
     path("api/notifications/read-all", legacy_view(views_social.notifications_mark_all_read)),
     path("api/notifications/<str:notification_id>/read", legacy_view(views_social.notification_mark_read)),
+    path("api/activity/hidden-events", legacy_view(views_social.activity_hidden_events)),
     path("api/micro-loans/offers", legacy_view(views_loans.micro_loan_offers)),
     path("api/micro-loans/applications", legacy_view(views_loans.micro_loan_applications)),
     path("api/micro-loans/applications/<str:loan_id>/repay", legacy_view(views_loans.micro_loan_repay)),
@@ -108,5 +110,6 @@ urlpatterns = [
     path("api/admin/feature-flags", legacy_view(views_admin.admin_feature_flags)),
     path("api/admin/feature-flags/<str:feature_key>", legacy_view(views_admin.admin_feature_flag_detail)),
     path("api/admin/audit-logs", legacy_view(views_admin.admin_audit_logs)),
+    path("api/admin/activity-events/<str:event_key>", legacy_view(views_admin.admin_activity_event_detail)),
     path("api/admin/receipts/export", legacy_view(views_admin.admin_receipts_export)),
 ]
