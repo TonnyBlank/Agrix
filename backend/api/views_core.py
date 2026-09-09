@@ -888,7 +888,6 @@ SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
 SCANNER_GEMINI_FALLBACK_MODEL = ""
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
-SCANNER_MIN_DIAGNOSIS_CONFIDENCE = 70.0
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
 SCANNER_UNDETERMINED_RESULT: dict[str, Any] = {
     "disease": "Unable to determine from image",
@@ -1020,7 +1019,10 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
         normalized_fertilizers = [str(item).strip() for item in fallback.get("fertilizerRecommendations") or [] if str(item).strip()]
 
     disease = normalize_text("disease")
-    if disease == SCANNER_UNDETERMINED_RESULT["disease"] or confidence < SCANNER_MIN_DIAGNOSIS_CONFIDENCE:
+    # Gemini is responsible for deciding whether the crop/symptoms are clear.
+    # Do not turn its legitimate lower-confidence diagnosis into a false 0%
+    # result; show the confidence so the farmer can judge the uncertainty.
+    if disease == SCANNER_UNDETERMINED_RESULT["disease"]:
         return dict(SCANNER_UNDETERMINED_RESULT)
 
     return {

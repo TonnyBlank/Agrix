@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
-from api.views_core import _build_scanner_result, _call_gemini_crop_scanner, _get_gemini_api_key, _restock_failed_order
+from api.views_core import _build_scanner_result, _call_gemini_crop_scanner, _get_gemini_api_key, _normalize_scanner_result, _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -68,6 +68,15 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["disease"], "Unable to determine from image")
         self.assertEqual(result["confidence"], 0.0)
         self.assertEqual(result["organicAlternatives"], [])
+
+    def test_scanner_keeps_a_gemini_diagnosis_with_lower_confidence(self):
+        result = _normalize_scanner_result(
+            {"disease": "Bacterial spot", "confidence": 62, "severity": "Moderate"},
+            _build_scanner_result("pepper.jpg", b"image-data"),
+        )
+
+        self.assertEqual(result["disease"], "Bacterial spot")
+        self.assertEqual(result["confidence"], 62.0)
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
