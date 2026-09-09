@@ -356,6 +356,7 @@ function ScannerLab() {
     .split(".")
     .map((item) => item.trim())
     .filter(Boolean) ?? [];
+  const isUndetermined = result?.disease === "Unable to determine from image";
 
   const preventionItems = result?.prevention
     .split(".")
@@ -696,13 +697,13 @@ function ScannerLab() {
                   </div>
                   <div className={`rounded-[1.1rem] border p-3.5 ${severityTone}`}>
                     <p className="text-[11px] uppercase tracking-[0.18em]">Severity</p>
-                    <p className="mt-2 font-display text-xl font-bold">{result.severity}</p>
+                    <p className="mt-2 font-display text-xl font-bold">{isUndetermined ? "Not assessed" : result.severity}</p>
                   </div>
                 </div>
 
                 <div className="rounded-[1.1rem] border border-border bg-muted/40 p-3.5">
                   <div className="flex items-center justify-between">
-                    <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Model confidence</p>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">Assessment confidence</p>
                     <p className="font-semibold text-foreground">{result.confidence}%</p>
                   </div>
                   <div className="mt-3 h-2 overflow-hidden rounded-full bg-emerald-100">
@@ -716,6 +717,12 @@ function ScannerLab() {
                 )}
 
                 <div className="space-y-3.5">
+                  {isUndetermined ? (
+                    <div className="rounded-[1.25rem] border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-50">
+                      Retake the image in daylight, fill the frame with one affected leaf or fruit, and keep the camera steady. No disease treatment is recommended from this result.
+                    </div>
+                  ) : (
+                    <>
                   <div className="rounded-[1.25rem] border border-emerald-200/80 bg-white p-4 shadow-sm dark:border-emerald-500/30 dark:bg-background/70">
                     <div className="flex items-center gap-3">
                       <ScanLine className="h-5 w-5 text-emerald-600" />
@@ -799,6 +806,8 @@ function ScannerLab() {
                       ))}
                     </div>
                   </div>
+                    </>
+                  )}
                 </div>
               </div>
             ) : (

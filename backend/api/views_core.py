@@ -886,99 +886,22 @@ SCANNER_GEMINI_MODEL = "gemini-flash-latest"
 SCANNER_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
+SCANNER_MIN_DIAGNOSIS_CONFIDENCE = 70.0
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
-SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
-    {
-        "disease": "Tomato Late Blight",
-        "scientificName": "Phytophthora infestans",
-        "crop": "Tomato",
-        "confidence": 97.8,
-        "severity": "Moderate",
-        "spreadRisk": "High",
-        "affectedArea": "35-50%",
-        "description": "The crop image suggests active late blight symptoms, including dark lesion spread and tissue collapse across the affected surface.",
-        "treatment": "Apply a copper-based fungicide within 48 hours. Remove heavily infected leaves to reduce spread.",
-        "organicAlternatives": [
-            "Apply an approved copper soap or copper hydroxide product at the recommended interval.",
-            "Remove heavily infected plant material and destroy it away from the field.",
-            "Improve airflow around the crop canopy to reduce moisture retention.",
-        ],
-        "fertilizerRecommendations": [
-            "Avoid high-nitrogen fertilizers which encourage lush, susceptible growth.",
-            "Apply potassium-rich foliar feeds to strengthen cell walls."
-        ],
-        "prevention": "Improve airflow, reduce leaf wetness, and avoid late evening irrigation.",
-    },
-    {
-        "disease": "Maize Leaf Streak",
-        "scientificName": "Maize streak virus",
-        "crop": "Maize",
-        "confidence": 95.4,
-        "severity": "High",
-        "spreadRisk": "High",
-        "affectedArea": "50-60%",
-        "description": "The visible streaking and chlorotic tissue pattern are consistent with a strong maize streak infection already spreading across the leaf.",
-        "treatment": "Rogue out severely affected plants. Start a targeted leafhopper control plan in the next spray cycle.",
-        "organicAlternatives": [
-            "Remove severely affected plants early to reduce field pressure.",
-            "Control alternate grass hosts around the plot to lower vector activity.",
-            "Use neem-based pest suppression where suitable for early vector management.",
-        ],
-        "fertilizerRecommendations": [
-            "Ensure adequate nitrogen top-dressing to support plant recovery.",
-            "Apply zinc or balanced micronutrients to reduce overall plant stress."
-        ],
-        "prevention": "Use resistant seed varieties and maintain clean field edges before the next planting cycle.",
-    },
-    {
-        "disease": "Pepper Bacterial Spot",
-        "scientificName": "Xanthomonas euvesicatoria",
-        "crop": "Pepper",
-        "confidence": 94.9,
-        "severity": "Moderate",
-        "spreadRisk": "Moderate",
-        "affectedArea": "20-35%",
-        "description": "The image pattern suggests bacterial spotting with multiple angular lesions and early canopy stress around the affected tissue.",
-        "treatment": "Remove badly affected leaves. Apply a labeled copper bactericide and avoid overhead irrigation for the next several days.",
-        "organicAlternatives": [
-            "Prune and destroy affected leaves away from the field.",
-            "Use copper soap where it fits your crop-management plan.",
-            "Reduce splash spread by watering close to the soil line.",
-        ],
-        "fertilizerRecommendations": [
-            "Maintain balanced calcium levels to strengthen plant immunity.",
-            "Avoid excessive nitrogen applications during active infection."
-        ],
-        "prevention": "Use clean seed, avoid handling plants when wet, and rotate away from susceptible crops after harvest.",
-    },
-    {
-        "disease": "Healthy Produce",
-        "scientificName": "No disease detected",
-        "crop": "Mixed crop",
-        "confidence": 99.1,
-        "severity": "Low",
-        "spreadRisk": "Low",
-        "affectedArea": "0-5%",
-        "description": "The scanned crop image does not show clear disease symptoms. Tissue color and surface structure appear largely normal in the captured area.",
-        "treatment": "No disease detected. Maintain your current irrigation and scouting schedule.",
-        "organicAlternatives": [
-            "Continue using compost or organic foliar feeds as planned.",
-            "Keep the field clean and remove weak plant tissue early.",
-            "Maintain balanced soil moisture and avoid plant stress.",
-        ],
-        "fertilizerRecommendations": [
-            "Continue with a balanced NPK fertilizer application based on the crop's growth stage.",
-            "Incorporate organic matter or compost to improve soil health."
-        ],
-        "prevention": "Keep monitoring twice a week and continue feeding with balanced nutrients.",
-    },
-]
-SCANNER_KEYWORD_MATCHERS: list[tuple[set[str], str]] = [
-    ({"tomato", "blight"}, "Tomato Late Blight"),
-    ({"maize", "corn", "streak"}, "Maize Leaf Streak"),
-    ({"pepper", "capsicum", "spot"}, "Pepper Bacterial Spot"),
-    ({"healthy", "normal", "fresh", "clean"}, "Healthy Produce"),
-]
+SCANNER_UNDETERMINED_RESULT: dict[str, Any] = {
+    "disease": "Unable to determine from image",
+    "scientificName": "Not assessed",
+    "crop": "Not identified",
+    "confidence": 0.0,
+    "severity": "Low",
+    "spreadRisk": "Low",
+    "affectedArea": "Not assessed",
+    "description": "No reliable diagnosis was made from this image. A disease should not be inferred without a clear, close photo of the affected crop tissue.",
+    "treatment": "Do not apply a disease treatment based on this result.",
+    "organicAlternatives": [],
+    "fertilizerRecommendations": [],
+    "prevention": "Retake the photo in daylight, focus on one affected leaf, include both sides if possible, and avoid blurred or distant images.",
+}
 SCANNER_GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -1012,29 +935,9 @@ SCANNER_GEMINI_RESPONSE_SCHEMA: dict[str, Any] = {
 }
 
 
-def _select_scanner_profile(file_name: str, content: bytes) -> dict[str, Any]:
-    normalized_name = file_name.lower()
-    profiles_by_name = {profile["disease"]: profile for profile in SCANNER_DIAGNOSIS_PROFILES}
-
-    for keywords, diagnosis_name in SCANNER_KEYWORD_MATCHERS:
-        if any(keyword in normalized_name for keyword in keywords):
-            return profiles_by_name[diagnosis_name]
-
-    digest = hashlib.sha256(content + normalized_name.encode("utf-8")).digest()
-    return SCANNER_DIAGNOSIS_PROFILES[digest[0] % len(SCANNER_DIAGNOSIS_PROFILES)]
-
-
-def _build_scanner_result(file_name: str, content: bytes) -> dict[str, Any]:
-    profile = _select_scanner_profile(file_name, content)
-    digest = hashlib.sha256(content + b"agrilink-crop-scanner").digest()
-    confidence_penalty = (digest[1] % 7) / 10
-    confidence_floor = 92.0 if profile["disease"] == "Healthy Produce" else 86.0
-
-    # Keep the API contract stable until a dedicated vision model is wired in.
-    return {
-        **profile,
-        "confidence": round(max(confidence_floor, min(99.8, float(profile["confidence"]) - confidence_penalty)), 1),
-    }
+def _build_scanner_result(_file_name: str, _content: bytes) -> dict[str, Any]:
+    # Never invent a crop disease when the vision service is unavailable.
+    return dict(SCANNER_UNDETERMINED_RESULT)
 
 
 def _get_gemini_api_key() -> str | None:
@@ -1086,7 +989,7 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
     try:
         confidence = round(float(confidence_value), 1)
     except (TypeError, ValueError):
-        confidence = float(fallback.get("confidence") or 90.0)
+        confidence = float(fallback.get("confidence") or 0.0)
     confidence = max(0.0, min(100.0, confidence))
 
     organic_alternatives = raw.get("organicAlternatives")
@@ -1107,8 +1010,12 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
     if not normalized_fertilizers:
         normalized_fertilizers = [str(item).strip() for item in fallback.get("fertilizerRecommendations") or [] if str(item).strip()]
 
+    disease = normalize_text("disease")
+    if disease == SCANNER_UNDETERMINED_RESULT["disease"] or confidence < SCANNER_MIN_DIAGNOSIS_CONFIDENCE:
+        return dict(SCANNER_UNDETERMINED_RESULT)
+
     return {
-        "disease": normalize_text("disease"),
+        "disease": disease,
         "scientificName": normalize_text("scientificName"),
         "crop": normalize_text("crop"),
         "confidence": confidence,
@@ -1159,8 +1066,11 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
     image_base64 = base64.b64encode(content).decode("utf-8")
     prompt = (
         "You are an agronomy assistant for smallholder farmers. Analyze this crop photo and return only JSON. "
-        "Describe the most likely visible crop issue or return Healthy Produce if no clear disease symptoms are visible. "
-        "Keep treatment and prevention practical for field use. "
+        "Only name a disease when visible symptoms in this specific image support it. Do not infer from file names, crop expectations, or missing details. "
+        "If the image appears healthy, set disease to No disease detected and explain the visible healthy evidence. "
+        "If the crop or symptoms are unclear, set disease to Unable to determine from image, scientificName to Not assessed, confidence to 0, "
+        "and treatment to Do not apply a disease treatment based on this result. "
+        "Keep treatment and prevention practical for field use only when a disease is clearly supported. "
         "Set severity and spreadRisk to one of Low, Moderate, or High. "
         "Set affectedArea as a short range like 0-5% or 20-35%. "
         "Provide 2-3 specific fertilizerRecommendations."

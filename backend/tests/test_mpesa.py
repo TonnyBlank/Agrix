@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 import requests
 
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
-from api.views_core import _call_gemini_crop_scanner, _get_gemini_api_key, _restock_failed_order
+from api.views_core import _build_scanner_result, _call_gemini_crop_scanner, _get_gemini_api_key, _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -62,6 +62,13 @@ class MpesaHelperTests(unittest.TestCase):
     def test_gemini_key_rejects_blank_value(self):
         self.assertIsNone(_get_gemini_api_key())
 
+    def test_scanner_fallback_never_invents_a_disease(self):
+        result = _build_scanner_result("tomato-late-blight.jpg", b"not-a-diagnostic-image")
+
+        self.assertEqual(result["disease"], "Unable to determine from image")
+        self.assertEqual(result["confidence"], 0.0)
+        self.assertEqual(result["organicAlternatives"], [])
+
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-flash-latest"}, clear=False)
     @patch("api.views_core.time.sleep")
     @patch("api.views_core.requests.post")
@@ -75,7 +82,7 @@ class MpesaHelperTests(unittest.TestCase):
                     "content": {
                         "parts": [
                             {
-                                "text": '{"disease":"Healthy Produce","severity":"Low","spreadRisk":"Low"}'
+                                "text": '{"disease":"No disease detected","scientificName":"Not applicable","crop":"Tomato","confidence":88,"severity":"Low","spreadRisk":"Low","affectedArea":"0%","description":"No clear disease symptoms are visible.","treatment":"Continue normal crop monitoring.","organicAlternatives":[],"fertilizerRecommendations":[],"prevention":"Inspect the crop weekly."}'
                             }
                         ]
                     }
@@ -86,7 +93,7 @@ class MpesaHelperTests(unittest.TestCase):
 
         result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
 
-        self.assertEqual(result["disease"], "Healthy Produce")
+        self.assertEqual(result["disease"], "No disease detected")
         self.assertEqual(post.call_count, 4)
         self.assertIn("gemini-2.5-flash", post.call_args.args[0])
 
