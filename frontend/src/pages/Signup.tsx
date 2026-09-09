@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle2, Circle, Eye, EyeOff, Home } from "lucide-react";
-import { getPasswordRequirements, getPasswordValidationMessage } from "@/lib/passwordPolicy";
+import { getPasswordRequirements, getPasswordValidationMessage, isPasswordValid } from "@/lib/passwordPolicy";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -18,6 +18,8 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
+  const passwordIsValid = isPasswordValid(password);
+  const passwordsMatch = password.length > 0 && password === confirmPassword;
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -129,7 +131,8 @@ export default function SignupPage() {
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <ul id="password-requirements" className="mt-3 space-y-1.5 text-xs text-muted-foreground" aria-live="polite">
+              <p className="mt-3 text-xs font-medium text-foreground">Password must contain:</p>
+              <ul id="password-requirements" className="mt-2 space-y-1.5 text-xs text-muted-foreground" aria-live="polite">
                 {getPasswordRequirements(password).map((requirement) => (
                   <li key={requirement.id} className={requirement.met ? "flex items-center gap-2 text-primary" : "flex items-center gap-2"}>
                     {requirement.met ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
@@ -161,7 +164,7 @@ export default function SignupPage() {
               </div>
             </div>
 
-            <Button type="submit" className="w-full h-12" disabled={loading}>
+            <Button type="submit" className="w-full h-12" disabled={loading || !passwordIsValid || !passwordsMatch}>
               {loading ? "Creating account..." : "Create Free Account"}
             </Button>
           </form>
