@@ -90,17 +90,10 @@ export default function DashboardHome() {
     const pendingOrders = sellingOrders.filter((order) => pendingStatuses.has(order.status)).length;
     const activeListings = products.filter((product) => product.is_available).length;
 
-    let recommendationCount = 0;
-    if (profile?.county) recommendationCount += 1;
-    if (profile?.main_crops?.length) recommendationCount += 1;
-    if (products.length) recommendationCount += 1;
-    if (pendingOrders > 0) recommendationCount += 1;
-
     return {
       revenue,
       activeListings,
       pendingOrders,
-      recommendationCount,
     };
   }, [products, profile?.county, profile?.main_crops, sellingOrders]);
 
@@ -232,13 +225,14 @@ export default function DashboardHome() {
       helper: "Deals waiting for the next action.",
     },
     {
-      title: "AI Recommendations",
-      value: String(metrics.recommendationCount),
+      title: "AI Scanner",
+      value: "Open",
       icon: Zap,
       iconClass: "bg-emerald-50 text-emerald-700",
       cardClass: "border-border/70 bg-white/82",
       valueClass: "text-foreground",
-      helper: metrics.recommendationCount > 0 ? "Ready for review." : "Complete setup to unlock more.",
+      helper: "Scan a crop for guidance.",
+      href: "/dashboard/ai-scanner",
     },
   ];
 
@@ -298,11 +292,8 @@ export default function DashboardHome() {
               </div>
 
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                {summaryCards.map((card) => (
-                  <div
-                    key={card.title}
-                    className={`flex min-h-[92px] flex-col rounded-[1.3rem] border p-3.5 shadow-[0_18px_38px_-34px_rgba(15,23,42,0.3)] ${card.cardClass}`}
-                  >
+                {summaryCards.map((card) => {
+                  const content = <>
                     <div className={`flex h-8 w-8 items-center justify-center rounded-[0.9rem] ${card.iconClass}`}>
                       <card.icon className="h-4 w-4" />
                     </div>
@@ -311,8 +302,25 @@ export default function DashboardHome() {
                       <p className={`font-display text-[1.35rem] font-bold ${card.valueClass}`}>{card.value}</p>
                       <span className="text-[11px] text-muted-foreground">{card.helper}</span>
                     </div>
-                  </div>
-                ))}
+                  </>;
+
+                  return card.href ? (
+                    <Link
+                      key={card.title}
+                      to={card.href}
+                      className={`flex min-h-[92px] flex-col rounded-[1.3rem] border p-3.5 shadow-[0_18px_38px_-34px_rgba(15,23,42,0.3)] transition-colors hover:border-emerald-300 hover:bg-emerald-50/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${card.cardClass}`}
+                    >
+                      {content}
+                    </Link>
+                  ) : (
+                    <div
+                      key={card.title}
+                      className={`flex min-h-[92px] flex-col rounded-[1.3rem] border p-3.5 shadow-[0_18px_38px_-34px_rgba(15,23,42,0.3)] ${card.cardClass}`}
+                    >
+                      {content}
+                    </div>
+                  );
+                })}
               </div>
             </motion.section>
 
