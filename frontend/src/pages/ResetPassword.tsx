@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { getPasswordValidationMessage, PASSWORD_POLICY_SUMMARY } from "@/lib/passwordPolicy";
 
 export default function ResetPasswordPage() {
   const [password, setPassword] = useState("");
@@ -33,8 +34,9 @@ export default function ResetPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (password.length < 6) {
-      toast({ title: "Password too short", description: "Use at least 6 characters.", variant: "destructive" });
+    const passwordValidationMessage = getPasswordValidationMessage(password);
+    if (passwordValidationMessage) {
+      toast({ title: "Choose a stronger password", description: passwordValidationMessage, variant: "destructive" });
       return;
     }
 
@@ -70,7 +72,8 @@ export default function ResetPasswordPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <Label htmlFor="password">New Password</Label>
-            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={6} required />
+            <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} autoComplete="new-password" required />
+            <p className="mt-2 text-xs text-muted-foreground">{PASSWORD_POLICY_SUMMARY}</p>
           </div>
           <div>
             <Label htmlFor="confirm-password">Confirm Password</Label>
@@ -79,7 +82,8 @@ export default function ResetPasswordPage() {
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              minLength={6}
+              minLength={8}
+              autoComplete="new-password"
               required
             />
           </div>

@@ -1,74 +1,8 @@
 # AgriLink X Backend
 
-The backend is a Django API layer for AgriLink X. It keeps Supabase as the system of record while enforcing business rules that should not live directly in the browser.
+This Django 5 ASGI service is the protected business API for AgriLink X. It validates Supabase bearer tokens, resolves application roles, and handles marketplace, orders, M-Pesa, delivery, finance, company, admin, and crop-scanning workflows.
 
-It supports farmers, companies, buyers, admins, marketplace trade, M-Pesa payments, subscriptions, micro-loans, company procurement, verification, messaging, AI scanner endpoints, and background payment resolution.
-
-## Stack
-
-- Django 5
-- Python
-- Supabase for auth, Postgres, storage, realtime, and RLS-backed data
-- uvicorn-compatible ASGI entrypoints
-- M-Pesa sandbox/production-compatible payment flow
-- optional Gemini API integration for AI scanner analysis
-
-## What The Backend Handles
-
-- authenticated profile reads and updates
-- products/listings
-- marketplace orders
-- cart APIs
-- atomic stock decrement and restoration
-- M-Pesa STK push initiation
-- M-Pesa callback handling
-- manual M-Pesa status checks
-- subscription payment activation
-- stuck-payment resolution
-- buyer cancellation and refund request flows
-- messages and conversation enrichment
-- crop event APIs
-- AI scanner APIs
-- ID verification APIs
-- micro-loan offers, applications, decisions, and repayments
-- company onboarding and profile APIs
-- company product catalog APIs
-- company partner APIs
-- company procurement request APIs
-- farmer procurement response APIs
-- admin APIs for users, loans, transactions, verification, feature flags, and audit logs
-
-## Environment Variables
-
-Create `backend/.env` from `backend/.env.example`.
-
-Minimum local values:
-
-```text
-DEBUG=true
-SECRET_KEY=change-me
-PORT=3001
-CLIENT_ORIGIN=http://localhost:8080
-
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_ANON_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
-
-MPESA_ENV=sandbox
-MPESA_MOCK_MODE=true
-MPESA_SHORTCODE=174379
-MPESA_PASSKEY=
-MPESA_CONSUMER_KEY=
-MPESA_CONSUMER_SECRET=
-MPESA_CALLBACK_URL=http://localhost:3001/api/payments/mpesa/callback
-```
-
-Never expose the service role key to the frontend or commit it to the repo.
-
-## Setup
+## Run Locally
 
 ```bash
 cd backend
@@ -76,105 +10,84 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+python manage.py migrate
+python manage.py runserver 127.0.0.1:3001
 ```
 
-Before using the API with a new Supabase project, run the root SQL bootstrap:
-
-```text
-../setup_database.sql
-```
-
-## Run Locally
+Run checks with:
 
 ```bash
+.venv/bin/python manage.py check
+```
+
+The liveness endpoint is `GET /health`. It has no database dependency and is appropriate for Render health checks and external uptime pings.
+
+## Configuration
+
+Use `.env.example` as the template. Required production configuration includes:
+
+```dotenv
+DJANGO_DEBUG=false
+DJANGO_SECRET_KEY=long-random-server-secret
+DJANGO_ALLOWED_HOSTS=agrix-bavp.onrender.com
+CLIENT_ORIGIN=https://agrilink-kenya.vercel.app
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+DELIVERY_OTP_SECRET=separate-random-server-secret
+```
+
+Add M-Pesa credentials only when running non-mock M-Pesa flows. Never commit `.env`, service-role keys, payment credentials, or Gemini keys.
+
+## Crop Scanner
+
+`POST /api/scanner/crops` accepts authenticated image uploads from `farmer_pro`, `company`, and `admin` users. The server accepts JPEG, PNG, and WebP up to 8 MB, sends the source bytes and MIME type to Gemini, and asks for structured JSON.
+
+- Primary model: `gemini-2.5-flash`
+- Rate-limit fallback: `gemini-2.5-flash-lite`
+- Lower-confidence model diagnoses are retained with their confidence
+- The safe undetermined result is reserved for an invalid image or unusable model response
+
+Gemini keys are read from `GEMINI_API_KEY` (with `GOOGLE_API_KEY` accepted as a compatibility fallback). The model name comes from `GEMINI_MODEL`.
+
+## Important Commands
+
+```bash
+# Development server
 npm run dev
-```
 
-The dev server runs on:
+# ASGI server on the normal local port
+npm start
 
-```text
-http://127.0.0.1:3001
-```
-
-Health check:
-
-```text
-http://127.0.0.1:3001/health
-```
-
-## Main API Areas
-
-- `/health`
-- `/api/products`
-- `/api/cart`
-- `/api/orders`
-- `/api/orders/<id>/cancel`
-- `/api/orders/<id>/refund-request`
-- `/api/payments/orders/<id>/mpesa`
-- `/api/payments/orders/<id>/mpesa-status`
-- `/api/payments/mpesa/callback`
-- `/api/payments/subscriptions`
-- `/api/scanner/crops`
-- `/api/profiles`
-- `/api/messages`
-- `/api/crop-events`
-- `/api/id-verification`
-- `/api/micro-loans`
-- `/api/companies`
-- `/api/farmer/companies`
-- `/api/farmer/procurement`
-- `/api/admin`
-
-Canonical route wiring lives in:
-
-```text
-backend/config/urls.py
-```
-
-## Payments And Stock Safety
-
-The backend protects marketplace consistency by coordinating with SQL functions and order/payment state.
-
-Important behavior:
-
-- stock is decremented atomically when an order is placed
-- failed or timed-out M-Pesa payments restore stock
-- buyer cancellation can restore stock when eligible
-- paid orders keep escrow, commission, and seller payout fields
-- refund requests are logged for admin review
-- subscription payments use a ledger before role activation
-
-## Background Jobs
-
-Resolve orders stuck in `initiated` or `pending_confirmation` payment state:
-
-```bash
-.venv/bin/python manage.py resolve_stuck_payments
-.venv/bin/python manage.py resolve_stuck_payments --timeout-minutes 30
-.venv/bin/python manage.py resolve_stuck_payments --dry-run
-```
-
-Recommended cron:
-
-```bash
-*/10 * * * * cd /path/to/backend && .venv/bin/python manage.py resolve_stuck_payments >> /var/log/agrilink/stuck_payments.log 2>&1
-```
-
-## Important Files
-
-- `manage.py` - Django management entrypoint
-- `main.py` - ASGI compatibility shim
-- `config/settings.py` - Django settings
-- `config/urls.py` - route wiring
-- `api/views_core.py` - core profile, marketplace, orders, payments, loans, and scanner logic
-- `api/views_companies.py` - company and procurement flows
-- `api/views_admin.py` - admin endpoints
-- `api/management/commands/resolve_stuck_payments.py` - payment recovery command
-
-## Verification
-
-```bash
+# Django configuration check
 npm run check
+
+# Reconcile payment records that remain pending
+.venv/bin/python manage.py resolve_stuck_payments
 ```
 
-For frontend and complete product documentation, see the [root README](../README.md).
+## Production on Render
+
+```text
+Root Directory: backend
+Build Command: pip install -r requirements.txt
+Start Command: python -m uvicorn config.asgi:application --host 0.0.0.0 --port $PORT
+Health Check Path: /health
+```
+
+Use the production origin as `CLIENT_ORIGIN`; it must exactly match the Vercel browser origin with no trailing slash. Render environment variables replace local `.env` values and require a redeploy after changes.
+
+## Main Areas
+
+| Location | Responsibility |
+| --- | --- |
+| `api/views_core.py` | Marketplace, carts, orders, M-Pesa, scanner, company/procurement, and core workflows. |
+| `api/common.py` | Supabase auth, role resolution, validation helpers, and shared responses. |
+| `api/views_admin.py` | Protected administration functionality. |
+| `api/urls.py` | API routing. |
+| `config/settings.py` | Django, CORS, security-header, and environment configuration. |
+| `api/management/commands/resolve_stuck_payments.py` | Background payment reconciliation. |
+
+Consult the root [README](../README.md) for full platform, frontend, Supabase, and deployment documentation.

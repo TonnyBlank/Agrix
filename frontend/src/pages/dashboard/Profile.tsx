@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { normalizeKenyanPhone, sanitizeDigits, sanitizePhoneInput } from "@/lib/inputSanitizers";
+import { getPasswordValidationMessage, PASSWORD_POLICY_SUMMARY } from "@/lib/passwordPolicy";
 
 export default function Profile() {
   const { profile, refreshProfile, user, applyProfileUpdate, role } = useAuth();
@@ -358,8 +359,9 @@ export default function Profile() {
   };
 
   const handleChangePassword = async () => {
-    if (!passwordForm.password || passwordForm.password.length < 6) {
-      toast.error("Password must be at least 6 characters.");
+    const passwordValidationMessage = getPasswordValidationMessage(passwordForm.password);
+    if (passwordValidationMessage) {
+      toast.error(passwordValidationMessage);
       return;
     }
 
@@ -678,11 +680,12 @@ export default function Profile() {
                 <div className="mt-5 space-y-4">
                   <div className="space-y-2">
                     <Label>New Password</Label>
-                    <Input type="password" value={passwordForm.password} onChange={(e) => setPasswordForm({ ...passwordForm, password: e.target.value })} className="rounded-xl" />
+                    <Input type="password" value={passwordForm.password} onChange={(e) => setPasswordForm({ ...passwordForm, password: e.target.value })} minLength={8} autoComplete="new-password" className="rounded-xl" />
+                    <p className="text-xs text-muted-foreground">{PASSWORD_POLICY_SUMMARY}</p>
                   </div>
                   <div className="space-y-2">
                     <Label>Confirm Password</Label>
-                    <Input type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} className="rounded-xl" />
+                    <Input type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })} minLength={8} autoComplete="new-password" className="rounded-xl" />
                   </div>
                   <Button onClick={() => void handleChangePassword()} disabled={isChangingPassword} className="w-full rounded-xl">
                     {isChangingPassword ? "Updating..." : "Update Password"}

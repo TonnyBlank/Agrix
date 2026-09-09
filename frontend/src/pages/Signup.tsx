@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, EyeOff, Home } from "lucide-react";
+import { CheckCircle2, Circle, Eye, EyeOff, Home } from "lucide-react";
+import { getPasswordRequirements, getPasswordValidationMessage } from "@/lib/passwordPolicy";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -20,6 +21,16 @@ export default function SignupPage() {
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
+    const passwordValidationMessage = getPasswordValidationMessage(password);
+    if (passwordValidationMessage) {
+      toast({
+        title: "Choose a stronger password",
+        description: passwordValidationMessage,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (password !== confirmPassword) {
       toast({
         title: "Passwords do not match",
@@ -104,8 +115,10 @@ export default function SignupPage() {
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Min 6 characters"
-                  minLength={6}
+                  placeholder="Create a strong password"
+                  minLength={8}
+                  autoComplete="new-password"
+                  aria-describedby="password-requirements"
                   required
                 />
                 <button
@@ -116,6 +129,14 @@ export default function SignupPage() {
                   {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+              <ul id="password-requirements" className="mt-3 space-y-1.5 text-xs text-muted-foreground" aria-live="polite">
+                {getPasswordRequirements(password).map((requirement) => (
+                  <li key={requirement.id} className={requirement.met ? "flex items-center gap-2 text-primary" : "flex items-center gap-2"}>
+                    {requirement.met ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Circle className="h-3.5 w-3.5" />}
+                    {requirement.message}
+                  </li>
+                ))}
+              </ul>
             </div>
             <div>
               <Label htmlFor="confirm-password">Confirm Password</Label>
@@ -126,7 +147,8 @@ export default function SignupPage() {
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter your password"
-                  minLength={6}
+                  minLength={8}
+                  autoComplete="new-password"
                   required
                 />
                 <button
