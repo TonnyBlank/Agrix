@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Search, Send, Trash2 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMessages } from "@/hooks/useMessages";
 import { useAuth } from "@/hooks/useAuth";
@@ -33,6 +33,7 @@ async function searchFarmersFromSupabase(query: string) {
 export default function Messages() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeConv, setActiveConv] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
@@ -40,7 +41,36 @@ export default function Messages() {
   const [farmerResults, setFarmerResults] = useState<FarmerSearchResult[]>([]);
   const [searchingFarmers, setSearchingFarmers] = useState(false);
   const [openingFarmerId, setOpeningFarmerId] = useState<string | null>(null);
+  const openedRecipientRef = useRef<string | null>(null);
   const { conversations, messages, loadingConvs, loadingMsgs, sendMessage, startConversation, deleteConversation } = useMessages(activeConv);
+  const recipientId = searchParams.get("recipient");
+
+  useEffect(() => {
+    if (!recipientId || !user) return;
+
+    if (recipientId === user.id) {
+      setSearchParams({}, { replace: true });
+      return;
+    }
+
+    if (openedRecipientRef.current === recipientId) return;
+    openedRecipientRef.current = recipientId;
+
+    let cancelled = false;
+    void (async () => {
+      const conversationId = await startConversation(recipientId);
+      if (!cancelled && conversationId) {
+        setActiveConv(conversationId);
+      }
+      if (!cancelled) {
+        setSearchParams({}, { replace: true });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [recipientId, setSearchParams, startConversation, user]);
 
   useEffect(() => {
     if (!activeConv && conversations.length) {

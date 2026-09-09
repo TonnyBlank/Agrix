@@ -247,11 +247,13 @@ export default function FarmerProfile() {
                     {isFollowing(userId) ? "Following" : "Follow Farmer"}
                   </Button>
                 )}
-                <Button asChild className="rounded-xl">
-                  <Link to="/dashboard/messages">
-                    <MessageCircle className="mr-2 h-4 w-4" /> Message Farmer
-                  </Link>
-                </Button>
+                {userId && userId !== user?.id && (
+                  <Button asChild className="rounded-xl">
+                    <Link to={`/dashboard/messages?recipient=${encodeURIComponent(userId)}`}>
+                      <MessageCircle className="mr-2 h-4 w-4" /> Message Farmer
+                    </Link>
+                  </Button>
+                )}
               </div>
             </div>
           </section>

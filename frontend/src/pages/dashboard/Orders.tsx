@@ -625,7 +625,7 @@ function OrdersDesktopTable(props: {
                 <td className="px-4 py-3.5">
                   <div className="flex flex-wrap justify-end gap-2">
                     <Button asChild size="sm" variant="outline" className="h-8 whitespace-nowrap rounded-xl px-3 text-xs">
-                      <Link to="/dashboard/messages">
+                      <Link to={`/dashboard/messages?recipient=${encodeURIComponent(view === "selling" ? order.buyer_id : order.farmer_id)}`}>
                         <MessageCircle className="mr-1 h-3 w-3" /> {view === "selling" ? "Buyer" : "Seller"}
                       </Link>
                     </Button>
@@ -870,7 +870,7 @@ function OrderCard(props: {
 
           <div className="flex flex-nowrap items-center justify-end gap-2 overflow-x-auto pb-1">
             <Button asChild size="sm" variant="outline" className="h-8 shrink-0 whitespace-nowrap rounded-xl px-3 text-xs">
-              <Link to="/dashboard/messages">
+              <Link to={`/dashboard/messages?recipient=${encodeURIComponent(view === "selling" ? order.buyer_id : order.farmer_id)}`}>
                 <MessageCircle className="mr-1 h-3 w-3" /> {view === "selling" ? "Buyer" : "Seller"}
               </Link>
             </Button>
@@ -916,7 +916,7 @@ function OrderCard(props: {
 
         <div className="grid grid-cols-2 gap-2 border-t border-border/70 pt-2 [&>*]:w-full [&>*]:justify-center">
           <Button asChild size="sm" variant="outline" className="h-8 rounded-xl px-3">
-            <Link to="/dashboard/messages">
+            <Link to={`/dashboard/messages?recipient=${encodeURIComponent(view === "selling" ? order.buyer_id : order.farmer_id)}`}>
               <MessageCircle className="mr-1 h-3 w-3" /> {view === "selling" ? "Message Buyer" : "Message Seller"}
             </Link>
           </Button>

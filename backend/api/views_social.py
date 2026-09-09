@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import requests
+
 from .common import ApiException, admin_client, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
 from .http import HttpRequest, HttpResponse, JsonResponse
 
@@ -58,7 +60,22 @@ def conversations_root(request: HttpRequest):
     if existing:
         return JsonResponse({"id": existing[0]["id"]})
     participant_a, participant_b = sorted([request.user_id, other_user_id])
-    created = request.supabase.insert("conversations", {"participant_a": participant_a, "participant_b": participant_b}, single=True)
+    try:
+        created = request.supabase.insert("conversations", {"participant_a": participant_a, "participant_b": participant_b}, single=True)
+    except requests.HTTPError as exc:
+        # Both participants can open the same chat at once. The database's unique
+        # constraint is authoritative, so return the row that won that race.
+        if exc.response is None or exc.response.status_code != 409:
+            raise
+        existing, _ = request.supabase.select(
+            "conversations",
+            select="id",
+            filters={"participant_a": f"eq.{participant_a}", "participant_b": f"eq.{participant_b}"},
+            limit=1,
+        )
+        if not existing:
+            raise
+        return JsonResponse({"id": existing[0]["id"]})
     return JsonResponse(created, status=201)
 
 

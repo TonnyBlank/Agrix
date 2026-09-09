@@ -593,10 +593,17 @@ export default function Marketplace() {
                     >
                       {isCheckingOut ? "Creating Order..." : "Buy Now"}
                     </Button>
-                    <Button asChild variant="ghost" className="h-11 w-full rounded-xl">
-                      <Link to="/dashboard/messages">
-                        <MessageCircle className="mr-2 h-4 w-4" /> Message Seller
-                      </Link>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-11 w-full rounded-xl"
+                      disabled={!syncedSelectedProduct.farmer_id || syncedSelectedProduct.farmer_id === user?.id}
+                      onClick={() => {
+                        setSelectedProduct(null);
+                        navigate(`/dashboard/messages?recipient=${encodeURIComponent(syncedSelectedProduct.farmer_id)}`);
+                      }}
+                    >
+                      <MessageCircle className="mr-2 h-4 w-4" /> Message Seller
                     </Button>
                   </DialogFooter>
               </div>

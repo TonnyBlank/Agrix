@@ -881,7 +881,7 @@ def _restock_failed_order(client, order: dict[str, Any]) -> None:
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
-SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
+SCANNER_GEMINI_MODEL = "gemini-3.6-flash"
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
 SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
     {
@@ -1150,7 +1150,7 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
     if not api_key:
         raise ApiException("Gemini API key is not configured.", 500)
 
-    model_name = os.getenv("GEMINI_MODEL", SCANNER_GEMINI_MODEL)
+    model_name = os.getenv("GEMINI_MODEL", SCANNER_GEMINI_MODEL).strip() or SCANNER_GEMINI_MODEL
     fallback = _build_scanner_result(file_name, content)
     image_base64 = base64.b64encode(content).decode("utf-8")
     prompt = (
@@ -1200,7 +1200,19 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
     if not text_part:
         raise ApiException("Gemini returned an empty crop analysis response.", 502)
 
-    parsed = json.loads(text_part)
+    response_text = text_part.strip()
+    if response_text.startswith("```"):
+        response_text = response_text.split("\n", 1)[-1]
+        if response_text.rstrip().endswith("```"):
+            response_text = response_text.rstrip()[:-3].rstrip()
+
+    if not response_text.startswith("{"):
+        object_start = response_text.find("{")
+        object_end = response_text.rfind("}")
+        if object_start >= 0 and object_end > object_start:
+            response_text = response_text[object_start : object_end + 1]
+
+    parsed = json.loads(response_text)
     if not isinstance(parsed, dict):
         raise ApiException("Gemini response format was invalid.", 502)
 
@@ -1248,16 +1260,14 @@ def scanner_crops(request: HttpRequest):
             logger.warning("Gemini crop scan fallback triggered: %s", fallback_reason)
             result = _build_scanner_result(image.name, content)
             analysis_mode = "heuristic"
+    else:
+        fallback_reason = "Gemini is not configured on the backend."
 
     if analysis_mode == "heuristic":
-        advisory = (
-            "This result is guidance only and should be confirmed if symptoms worsen or spread quickly. "
-            + (
-                f"Gemini fallback reason: {fallback_reason}."
-                if fallback_reason
-                else "Add GEMINI_API_KEY on the backend to enable Gemini analysis."
-            )
-        )
+        advisory = "AI analysis was unavailable, so this is a basic image-based estimate. "
+        if fallback_reason:
+            advisory += f"{fallback_reason} "
+        advisory += "Please confirm it with an agronomist if symptoms worsen or spread quickly."
 
     scanned_at = now_iso()
     scan_record: dict[str, Any] = {}
