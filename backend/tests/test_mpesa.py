@@ -129,6 +129,34 @@ class MpesaHelperTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
     @patch("api.views_core.requests.post")
+    def test_gemini_scanner_switches_to_flash_lite_after_quota_error(self, post):
+        quota_error = Mock(status_code=429, text='{"error":{"status":"RESOURCE_EXHAUSTED"}}')
+        quota_error.raise_for_status.side_effect = requests.HTTPError(response=quota_error)
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"disease":"No disease detected","scientificName":"Not applicable","crop":"Tomato","confidence":88,"severity":"Low","spreadRisk":"Low","affectedArea":"0%","description":"No clear disease symptoms are visible.","treatment":"Continue normal crop monitoring.","organicAlternatives":[],"fertilizerRecommendations":[],"prevention":"Inspect the crop weekly."}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        post.side_effect = [quota_error, success]
+
+        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+
+        self.assertEqual(result["disease"], "No disease detected")
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("gemini-3.6-flash", post.call_args_list[0].args[0])
+        self.assertIn("gemini-3.5-flash-lite", post.call_args_list[1].args[0])
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch("api.views_core.requests.post")
     def test_gemini_scanner_uses_json_after_thought_part(self, post):
         success = Mock(status_code=200)
         success.json.return_value = {

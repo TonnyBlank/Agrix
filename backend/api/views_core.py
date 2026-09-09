@@ -883,8 +883,8 @@ SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
 SCANNER_GEMINI_MODEL = "gemini-3.6-flash"
-SCANNER_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
-SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+SCANNER_GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
 SCANNER_MIN_DIAGNOSIS_CONFIDENCE = 70.0
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
@@ -1150,6 +1150,10 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
                     str(exc) or exc.__class__.__name__,
                     _gemini_error_detail(error_response),
                 )
+                # A 429 quota response includes a retry delay that can be much longer
+                # than a web request. Try the lower-cost model instead of waiting.
+                if status_code == 429:
+                    break
                 if status_code not in SCANNER_GEMINI_RETRYABLE_STATUS_CODES or attempt == SCANNER_GEMINI_MAX_ATTEMPTS - 1:
                     break
                 time.sleep(attempt + 1)
