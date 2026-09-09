@@ -940,6 +940,13 @@ def _build_scanner_result(_file_name: str, _content: bytes) -> dict[str, Any]:
     return dict(SCANNER_UNDETERMINED_RESULT)
 
 
+def _gemini_error_detail(response: requests.Response | None) -> str:
+    response_text = getattr(response, "text", "") if response is not None else ""
+    if not isinstance(response_text, str):
+        return "<unavailable>"
+    return response_text.strip().replace("\n", " ")[:500] or "<empty>"
+
+
 def _get_gemini_api_key() -> str | None:
     def _is_placeholder(value: str | None) -> bool:
         if value is None:
@@ -1132,7 +1139,17 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
                 break
             except requests.RequestException as exc:
                 last_error = exc
-                status_code = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+                error_response = exc.response if isinstance(exc, requests.HTTPError) else None
+                status_code = error_response.status_code if error_response is not None else None
+                logger.warning(
+                    "Gemini crop scan request failed model=%s attempt=%s/%s status=%s error=%s response=%s",
+                    candidate_model,
+                    attempt + 1,
+                    SCANNER_GEMINI_MAX_ATTEMPTS,
+                    status_code,
+                    str(exc) or exc.__class__.__name__,
+                    _gemini_error_detail(error_response),
+                )
                 if status_code not in SCANNER_GEMINI_RETRYABLE_STATUS_CODES or attempt == SCANNER_GEMINI_MAX_ATTEMPTS - 1:
                     break
                 time.sleep(attempt + 1)
@@ -1238,7 +1255,15 @@ def scanner_crops(request: HttpRequest):
             advisory = "AI output can be wrong. Confirm serious or spreading symptoms with an agronomist."
         except (ApiException, requests.RequestException, json.JSONDecodeError) as exc:
             fallback_reason = "Gemini is temporarily unavailable. Please try the scan again in a moment."
-            logger.warning("Gemini crop scan fallback triggered: %s", str(exc) or exc.__class__.__name__)
+            error_response = getattr(exc, "response", None)
+            status_code = getattr(error_response, "status_code", None)
+            logger.warning(
+                "Gemini crop scan fallback triggered error_type=%s status=%s error=%s response=%s",
+                exc.__class__.__name__,
+                status_code,
+                str(exc) or exc.__class__.__name__,
+                _gemini_error_detail(error_response),
+            )
             result = _build_scanner_result(image.name, content)
             analysis_mode = "heuristic"
     else:
