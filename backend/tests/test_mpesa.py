@@ -2,8 +2,10 @@ import os
 import unittest
 from unittest.mock import Mock, patch
 
+import requests
+
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
-from api.views_core import _get_gemini_api_key, _restock_failed_order
+from api.views_core import _call_gemini_crop_scanner, _get_gemini_api_key, _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -59,6 +61,34 @@ class MpesaHelperTests(unittest.TestCase):
     @patch.dict(os.environ, {"GEMINI_API_KEY": "   "}, clear=False)
     def test_gemini_key_rejects_blank_value(self):
         self.assertIsNone(_get_gemini_api_key())
+
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-flash-latest"}, clear=False)
+    @patch("api.views_core.time.sleep")
+    @patch("api.views_core.requests.post")
+    def test_gemini_scanner_retries_503_then_uses_fallback_model(self, post, _sleep):
+        unavailable = Mock(status_code=503)
+        unavailable.raise_for_status.side_effect = requests.HTTPError(response=unavailable)
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"disease":"Healthy Produce","severity":"Low","spreadRisk":"Low"}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        post.side_effect = [unavailable, unavailable, unavailable, success]
+
+        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+
+        self.assertEqual(result["disease"], "Healthy Produce")
+        self.assertEqual(post.call_count, 4)
+        self.assertIn("gemini-2.5-flash", post.call_args.args[0])
 
     def test_failed_payment_restock_is_idempotent(self):
         client = Mock()

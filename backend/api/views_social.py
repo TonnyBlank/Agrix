@@ -4,7 +4,7 @@ from datetime import datetime
 
 import requests
 
-from .common import ApiException, admin_client, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
+from .common import ApiException, api_view, ensure_profile_exists, load_profiles_by_user_ids, method_not_allowed, now_iso, parse_json_body, require_auth
 from .http import HttpRequest, HttpResponse, JsonResponse
 
 
@@ -26,7 +26,7 @@ def conversations_root(request: HttpRequest):
                 if conversation.get("participant_a") and conversation.get("participant_b")
             }
         )
-        profiles_by_user_id = load_profiles_by_user_ids(admin_client(), other_ids, "user_id, full_name, photo_url")
+        profiles_by_user_id = load_profiles_by_user_ids(request.supabase, other_ids, "user_id, full_name, photo_url")
         enriched = []
         for conversation in conversations:
             other_id = (

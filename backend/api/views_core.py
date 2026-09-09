@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -881,7 +882,10 @@ def _restock_failed_order(client, order: dict[str, Any]) -> None:
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
-SCANNER_GEMINI_MODEL = "gemini-3.6-flash"
+SCANNER_GEMINI_MODEL = "gemini-flash-latest"
+SCANNER_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+SCANNER_GEMINI_MAX_ATTEMPTS = 3
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
 SCANNER_DIAGNOSIS_PROFILES: list[dict[str, Any]] = [
     {
@@ -1178,14 +1182,39 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
             "responseSchema": SCANNER_GEMINI_RESPONSE_SCHEMA,
         },
     }
-    response = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=60,
-    )
-    response.raise_for_status()
-    body = response.json()
+    model_names = [model_name]
+    if model_name != SCANNER_GEMINI_FALLBACK_MODEL:
+        model_names.append(SCANNER_GEMINI_FALLBACK_MODEL)
+
+    body: dict[str, Any] | None = None
+    last_error: requests.RequestException | None = None
+    for candidate_model in model_names:
+        for attempt in range(SCANNER_GEMINI_MAX_ATTEMPTS):
+            try:
+                response = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent",
+                    headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+                    json=payload,
+                    timeout=60,
+                )
+                if response.status_code in SCANNER_GEMINI_RETRYABLE_STATUS_CODES:
+                    response.raise_for_status()
+                response.raise_for_status()
+                body = response.json()
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                status_code = exc.response.status_code if isinstance(exc, requests.HTTPError) and exc.response is not None else None
+                if status_code not in SCANNER_GEMINI_RETRYABLE_STATUS_CODES or attempt == SCANNER_GEMINI_MAX_ATTEMPTS - 1:
+                    break
+                time.sleep(attempt + 1)
+        if body is not None:
+            break
+
+    if body is None:
+        if last_error:
+            raise last_error
+        raise ApiException("Gemini did not return a crop analysis response.", 502)
 
     prompt_feedback = body.get("promptFeedback") or {}
     if prompt_feedback.get("blockReason"):
@@ -1256,8 +1285,8 @@ def scanner_crops(request: HttpRequest):
             analysis_mode = "gemini"
             advisory = "AI output can be wrong. Confirm serious or spreading symptoms with an agronomist."
         except (ApiException, requests.RequestException, json.JSONDecodeError) as exc:
-            fallback_reason = str(exc) or exc.__class__.__name__
-            logger.warning("Gemini crop scan fallback triggered: %s", fallback_reason)
+            fallback_reason = "Gemini is temporarily unavailable. Please try the scan again in a moment."
+            logger.warning("Gemini crop scan fallback triggered: %s", str(exc) or exc.__class__.__name__)
             result = _build_scanner_result(image.name, content)
             analysis_mode = "heuristic"
     else:
