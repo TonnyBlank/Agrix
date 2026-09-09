@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 
 import DashboardShell from "@/components/dashboard/DashboardShell";
+import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart, type CartItem } from "@/hooks/useCart";
 import { apiFetch } from "@/lib/api";
@@ -13,6 +14,13 @@ import { buildDeliveryQuote } from "@/lib/deliveryPricing";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+type CheckoutOrder = {
+  id: string;
+  product_id: string;
+  total_price: number;
+  delivery_fee: number;
+};
 
 function canCheckout(item: CartItem) {
   if (!item.product) return false;
@@ -37,6 +45,9 @@ export default function Cart() {
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [isBulkSelecting, setIsBulkSelecting] = useState(false);
   const [isCheckingOutSelected, setIsCheckingOutSelected] = useState(false);
+  const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [paymentPhone, setPaymentPhone] = useState("");
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
 
   const buyerCounty = profile?.county?.trim() || "";
   const buyerSubCounty = typeof window !== "undefined" ? window.localStorage.getItem("farm_sub_county") || "" : "";
@@ -71,6 +82,12 @@ export default function Cart() {
       return next;
     });
   }, [items]);
+
+  useEffect(() => {
+    if (paymentPhone.trim()) return;
+    const defaultPhone = profile?.phone?.trim() || profile?.payout_mpesa_number?.trim();
+    if (defaultPhone) setPaymentPhone(defaultPhone);
+  }, [paymentPhone, profile?.phone, profile?.payout_mpesa_number]);
 
   useEffect(() => {
     let cancelled = false;
@@ -214,26 +231,26 @@ export default function Cart() {
     setBusyItemId(null);
   };
 
-  const checkoutItem = async (item: CartItem) => {
+  const checkoutItem = async (item: CartItem): Promise<CheckoutOrder | null> => {
     if (!item.product) {
       toast.error("This item can no longer be checked out because the product is unavailable.");
-      return false;
+      return null;
     }
 
     if (!canCheckout(item)) {
       toast.error("This item cannot be checked out. Please adjust quantity or remove it.");
-      return false;
+      return null;
     }
 
     if (!selectedByItemId[item.id]) {
       toast.error("Mark this item first before checkout.");
-      return false;
+      return null;
     }
 
     const deliveryQuote = deliveryQuoteByItemId[item.id];
 
     try {
-      await apiFetch("/orders", {
+      const createdOrder = await apiFetch<CheckoutOrder>("/orders", {
         method: "POST",
         body: {
           product_id: item.product_id,
@@ -249,41 +266,81 @@ export default function Cart() {
       if (!removed) {
         toast.error("Order created, but cart cleanup failed. Remove that cart item manually to avoid duplicate checkout.");
       }
-      return true;
+      return createdOrder;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create order from cart item.");
-      return false;
+      return null;
     }
   };
 
-  const checkoutSelectedItems = async () => {
+  const verifyStartedPayments = async (orders: CheckoutOrder[]) => {
+    await new Promise((resolve) => window.setTimeout(resolve, 10_000));
+
+    const results = await Promise.allSettled(
+      orders.map((order) =>
+        apiFetch<{ payment_status: string }>(`/payments/orders/${order.id}/mpesa-status`),
+      ),
+    );
+    const paidCount = results.filter(
+      (result) => result.status === "fulfilled" && result.value.payment_status === "paid",
+    ).length;
+
+    if (paidCount) {
+      toast.success(`${paidCount} checkout payment${paidCount === 1 ? "" : "s"} confirmed.`);
+    }
+  };
+
+  const checkoutAndPaySelectedItems = async () => {
     if (!selectedCheckoutableItems.length) {
       toast.error("Select at least one ready item before checkout.");
       return;
     }
 
     setIsCheckingOutSelected(true);
-    let successCount = 0;
     let failureCount = 0;
+    const createdOrders: CheckoutOrder[] = [];
 
     for (const item of selectedCheckoutableItems) {
-      const checkedOut = await checkoutItem(item);
-      if (checkedOut) {
-        successCount += 1;
+      const createdOrder = await checkoutItem(item);
+      if (createdOrder) {
+        createdOrders.push(createdOrder);
       } else {
         failureCount += 1;
       }
     }
 
-    setIsCheckingOutSelected(false);
+    const paymentResults = await Promise.allSettled(
+      createdOrders.map((order) =>
+        apiFetch<{ message: string }>(`/payments/orders/${order.id}/mpesa`, {
+          method: "POST",
+          body: { phoneNumber: paymentPhone },
+        }),
+      ),
+    );
+    const paymentStartedOrders = createdOrders.filter(
+      (_, index) => paymentResults[index]?.status === "fulfilled",
+    );
+    const paymentFailureCount = createdOrders.length - paymentStartedOrders.length;
 
-    if (successCount) {
-      toast.success(`${successCount} order${successCount === 1 ? "" : "s"} created. Pay securely with M-Pesa next.`);
+    setIsCheckingOutSelected(false);
+    setPaymentDialogOpen(false);
+
+    if (paymentStartedOrders.length) {
+      toast.success(
+        `${paymentStartedOrders.length} M-Pesa prompt${paymentStartedOrders.length === 1 ? "" : "s"} sent. Approve the prompt${paymentStartedOrders.length === 1 ? "" : "s"} on your phone.`,
+      );
+      void verifyStartedPayments(paymentStartedOrders);
       void navigate("/dashboard/orders");
     }
 
     if (failureCount) {
       toast.error(`${failureCount} item${failureCount === 1 ? "" : "s"} could not be checked out.`);
+    }
+
+    if (paymentFailureCount) {
+      const message = `${paymentFailureCount} order${paymentFailureCount === 1 ? "" : "s"} was created but no M-Pesa prompt could be sent. Cancel the unpaid order from Orders, then add the product to Cart to try again.`;
+      setCheckoutError(message);
+      toast.error(message);
     }
   };
 
@@ -295,7 +352,7 @@ export default function Cart() {
             <div className="space-y-1.5">
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80">Marketplace Cart</p>
               <h2 className="font-display text-2xl font-bold text-foreground">Review your cart and checkout in one simple flow</h2>
-              <p className="text-sm text-muted-foreground">Select the items you want, confirm the total, then pay securely with M-Pesa from Orders.</p>
+              <p className="text-sm text-muted-foreground">Select the items you want, confirm the total, and complete M-Pesa checkout here.</p>
             </div>
             <div className="grid w-full max-w-md grid-cols-4 gap-2 text-center">
               <div className="rounded-xl border border-white/80 bg-white/85 p-3">
@@ -348,9 +405,16 @@ export default function Cart() {
                 {isBulkSelecting ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : null}
                 {allReadySelected ? "Clear Selection" : "Select All"}
               </Button>
-              <Button className="rounded-xl" disabled={!selectedCheckoutableItems.length || isCheckingOutSelected} onClick={() => void checkoutSelectedItems()}>
+              <Button
+                className="rounded-xl"
+                disabled={!selectedCheckoutableItems.length || isCheckingOutSelected}
+                onClick={() => {
+                  setCheckoutError(null);
+                  setPaymentDialogOpen(true);
+                }}
+              >
                 {isCheckingOutSelected ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <ShoppingBag className="mr-2 h-4 w-4" />}
-                Checkout Now
+                Checkout & Pay
               </Button>
             </div>
           </div>
@@ -489,6 +553,29 @@ export default function Cart() {
           </div>
         )}
       </div>
+      <MpesaPaymentDialog
+        open={paymentDialogOpen}
+        onOpenChange={(open) => {
+          setPaymentDialogOpen(open);
+          if (open) setCheckoutError(null);
+        }}
+        title="Complete cart checkout"
+        description={
+          selectedCheckoutableItems.length > 1
+            ? "Your selected items create separate product orders. M-Pesa will send one prompt for each order, and each must be approved on your phone."
+            : "Confirm the number that should receive the M-Pesa prompt for this cart checkout."
+        }
+        amountValue={`KES ${selectedSummary.total.toLocaleString()}`}
+        referenceLabel="Checkout"
+        referenceValue={`${selectedCheckoutableItems.length} item${selectedCheckoutableItems.length === 1 ? "" : "s"} selected`}
+        phoneNumber={paymentPhone}
+        onPhoneChange={setPaymentPhone}
+        onConfirm={() => void checkoutAndPaySelectedItems()}
+        confirmLabel="Place Order & Pay"
+        confirmPendingLabel="Creating orders..."
+        busy={isCheckingOutSelected}
+        errorMessage={checkoutError}
+      />
     </DashboardShell>
   );
 }

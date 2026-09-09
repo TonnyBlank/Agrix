@@ -8,7 +8,7 @@ It supports mixed farm enterprises, including crops, livestock, poultry, eggs, d
 
 - Supabase email/password authentication with application roles: `farmer_free`, `farmer_pro`, `company`, `transporter`, and `admin`
 - Farmer profiles, farm records, crop events, products, stock-aware carts, buyer and seller orders
-- Marketplace product listings, order lifecycle handling, seller/buyer dashboards, and conversations
+- Marketplace product listings, Cart-first M-Pesa checkout, order lifecycle handling, seller/buyer dashboards, and conversations
 - M-Pesa STK Push integration with sandbox/mock support and payment-status handling
 - Delivery tracking and delivery confirmation OTPs
 - Company onboarding, verification support, procurement requests, supplier responses, and company order workflows

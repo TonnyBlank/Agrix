@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { Heart, MapPin, MessageCircle, PackageCheck, ShoppingCart, Sprout, Star, Video } from "lucide-react";
 import DashboardShell from "@/components/dashboard/DashboardShell";
 import { useMarketplaceProducts, type Product } from "@/hooks/useProducts";
-import { useOrders } from "@/hooks/useOrders";
 import { useAuth } from "@/hooks/useAuth";
 import { useCart } from "@/hooks/useCart";
 import { formatApproxDistance, getApproxDistanceKm, normalizeLocationName } from "@/lib/locationDistance";
@@ -23,7 +22,6 @@ import {
 
 export default function Marketplace() {
   const { products, loading, toggleLike, rateProduct } = useMarketplaceProducts();
-  const { placeOrder } = useOrders();
   const { addItem, totals: cartTotals } = useCart();
   const { user, profile } = useAuth();
   const navigate = useNavigate();
@@ -226,28 +224,13 @@ export default function Marketplace() {
 
   const handleBuy = async () => {
     if (!syncedSelectedProduct) return;
-    if (!user) {
-      toast.error("Please sign in before placing an order.");
-      return;
-    }
-    if (parsedQuantity > syncedSelectedProduct.stock) {
-      toast.error(`Only ${syncedSelectedProduct.stock} ${syncedSelectedProduct.unit} available for this product.`);
-      return;
-    }
     setIsCheckingOut(true);
-    const createdOrder = await placeOrder({
-      product_id: syncedSelectedProduct.id,
-      quantity: parsedQuantity,
-      unit: syncedSelectedProduct.unit,
-      delivery_distance_km: selectedProductQuote?.distanceKm,
-      pickup_county: selectedProductQuote?.pickupCounty || viewerCounty || undefined,
-    });
+    const added = await handleAddToCart(syncedSelectedProduct, parsedQuantity);
 
-    if (createdOrder) {
-      toast.success("Order created. Pay securely with M-Pesa next.");
+    if (added) {
       setSelectedProduct(null);
       setQuantity("1");
-      void navigate("/dashboard/orders", { replace: false });
+      void navigate("/dashboard/cart", { replace: false });
     }
     setIsCheckingOut(false);
   };
@@ -567,7 +550,7 @@ export default function Marketplace() {
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-700/80 dark:text-emerald-300/80">Safe checkout</p>
                         <h4 className="font-display text-xl font-bold text-foreground">Pay safely, then confirm delivery</h4>
                         <p className="text-sm leading-6 text-muted-foreground">
-                          Add to cart like a normal marketplace, or buy this item now. Your payment stays in AgriLink escrow until delivery is confirmed.
+                          Add this item to Cart to review the total and complete M-Pesa payment in one checkout flow. Your payment stays in AgriLink escrow until delivery is confirmed.
                         </p>
                       </div>
                     </div>
@@ -591,7 +574,7 @@ export default function Marketplace() {
                       disabled={isCheckingOut || !syncedSelectedProduct.is_available || Number(syncedSelectedProduct.stock) <= 0}
                       className="h-12 w-full rounded-xl"
                     >
-                      {isCheckingOut ? "Creating Order..." : "Buy Now"}
+                      {isCheckingOut ? "Opening Cart..." : "Buy in Cart"}
                     </Button>
                     <Button
                       type="button"

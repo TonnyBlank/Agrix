@@ -2,23 +2,19 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Check,
-  CreditCard,
   Download,
   Eye,
   LoaderCircle,
   MessageCircle,
   Package,
-  RefreshCw,
   Settings2,
   ShoppingBag,
   Truck,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOrders, type Order, type OrderStatus } from "@/hooks/useOrders";
-import { useAuth } from "@/hooks/useAuth";
 import DashboardShell from "@/components/dashboard/DashboardShell";
-import MpesaPaymentDialog from "@/components/dashboard/MpesaPaymentDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -534,12 +530,9 @@ function OrdersDesktopTable(props: {
   startIndex?: number;
   view: "selling" | "buying";
   busyOrderId: string | null;
-  verificationCountdownByOrder: Record<string, number>;
   onChangeStatus: (orderId: string, status: OrderStatus) => void;
   onCancelOrder: (orderId: string) => void;
   onRequestRefund: (order: Order) => void;
-  onOpenPayment: (order: Order) => void;
-  onRefreshPayment: (orderId: string) => void;
   onViewReceipt: (order: Order) => void;
 }) {
   const {
@@ -547,12 +540,9 @@ function OrdersDesktopTable(props: {
     startIndex = 0,
     view,
     busyOrderId,
-    verificationCountdownByOrder,
     onChangeStatus,
     onCancelOrder,
     onRequestRefund,
-    onOpenPayment,
-    onRefreshPayment,
     onViewReceipt,
   } = props;
 
@@ -588,7 +578,6 @@ function OrdersDesktopTable(props: {
             const paidLabel = paymentStatusLabels[order.payment_status] ?? order.payment_status;
             const paidBadgeClass = paymentStatusColors[order.payment_status] ?? "";
             const busy = busyOrderId === order.id;
-            const verifyCountdown = verificationCountdownByOrder[order.id] ?? 0;
 
             return (
               <tr key={order.id} className="border-b border-border/70 align-top text-sm last:border-b-0">
@@ -639,29 +628,6 @@ function OrdersDesktopTable(props: {
                     />
                     <ReceiptActions order={order} onView={onViewReceipt} />
                   </div>
-                  {view === "buying" && order.payment_status !== "paid" && order.status !== "cancelled" && (
-                    <div className="mt-2 flex flex-wrap justify-end gap-2">
-                      <Button size="sm" className="h-8 rounded-xl px-3 text-xs" disabled={busy} onClick={() => onOpenPayment(order)}>
-                        {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <CreditCard className="mr-1 h-3 w-3" />}
-                        Pay with M-Pesa
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-8 rounded-xl px-3 text-xs"
-                        disabled={busy || !order.checkout_request_id || verifyCountdown > 0}
-                        onClick={() => onRefreshPayment(order.id)}
-                      >
-                        <RefreshCw className="mr-1 h-3 w-3" />
-                        {verifyCountdown > 0 ? `Verifying in ${verifyCountdown}s` : "Check M-Pesa"}
-                      </Button>
-                    </div>
-                  )}
-                  {verifyCountdown > 0 ? (
-                    <p className="mt-2 text-right text-xs text-muted-foreground">
-                      M-Pesa prompt sent. Automatic verification starts in {verifyCountdown}s.
-                    </p>
-                  ) : null}
                   {order.payment_error ? (
                     <div className="mt-2 rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2 text-right">
                       <p className="text-xs font-medium text-destructive">{order.payment_error}</p>
@@ -788,8 +754,6 @@ function OrderCard(props: {
   onChangeStatus: (status: OrderStatus) => void;
   onCancelOrder: (orderId: string) => void;
   onRequestRefund: (order: Order) => void;
-  onOpenPayment: () => void;
-  onRefreshPayment: () => void;
   onViewReceipt: (order: Order) => void;
 }) {
   const {
@@ -799,8 +763,6 @@ function OrderCard(props: {
     onChangeStatus,
     onCancelOrder,
     onRequestRefund,
-    onOpenPayment,
-    onRefreshPayment,
     onViewReceipt,
   } = props;
 
@@ -932,18 +894,6 @@ function OrderCard(props: {
         </div>
       </div>
 
-      {view === "buying" && order.payment_status !== "paid" && order.status !== "cancelled" && (
-        <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border/70 pt-2.5 sm:flex sm:flex-row sm:flex-wrap">
-          <Button size="sm" className="h-9 rounded-xl px-3" disabled={busy} onClick={onOpenPayment}>
-            {busy ? <LoaderCircle className="mr-1 h-3 w-3 animate-spin" /> : <CreditCard className="mr-1 h-3 w-3" />}
-            Pay with M-Pesa
-          </Button>
-          <Button size="sm" variant="outline" className="h-9 rounded-xl px-3" disabled={busy || !order.checkout_request_id} onClick={onRefreshPayment}>
-            <RefreshCw className="mr-1 h-3 w-3" /> Check M-Pesa
-          </Button>
-        </div>
-      )}
-
       {order.payment_error ? (
         <div className="mt-2 rounded-xl border border-destructive/20 bg-destructive/8 px-3 py-2">
           <p className="text-xs font-medium text-destructive">{order.payment_error}</p>
@@ -959,18 +909,11 @@ export default function Orders() {
     buyingOrders,
     loading,
     updateOrderStatus,
-    initiateMpesaPayment,
-    refreshMpesaPaymentStatus,
     cancelOrder,
     requestRefund,
     refetch,
   } = useOrders();
-  const { profile } = useAuth();
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
-  const [verificationCountdownByOrder, setVerificationCountdownByOrder] = useState<Record<string, number>>({});
-  const [showPendingPayments, setShowPendingPayments] = useState(false);
-  const [paymentPhoneByOrder, setPaymentPhoneByOrder] = useState<Record<string, string>>({});
-  const [paymentDialogOrder, setPaymentDialogOrder] = useState<Order | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
   const [activeExportRange, setActiveExportRange] = useState<number>(30);
   const [transactionSearch, setTransactionSearch] = useState("");
@@ -989,9 +932,6 @@ export default function Orders() {
   const [refundDialogOrder, setRefundDialogOrder] = useState<Order | null>(null);
   const [refundReason, setRefundReason] = useState("");
   const [refundSubmitting, setRefundSubmitting] = useState(false);
-
-  const paymentVerificationIntervalsRef = useRef<Record<string, number>>({});
-  const paymentVerificationTimeoutsRef = useRef<Record<string, number>>({});
 
   const applyFilters = () => {
     const filtersObj = {
@@ -1013,64 +953,6 @@ export default function Orders() {
     void refetch(true);
   };
 
-  const clearPaymentVerificationWindow = (orderId: string) => {
-    const activeInterval = paymentVerificationIntervalsRef.current[orderId];
-    if (activeInterval) {
-      window.clearInterval(activeInterval);
-      delete paymentVerificationIntervalsRef.current[orderId];
-    }
-
-    const activeTimeout = paymentVerificationTimeoutsRef.current[orderId];
-    if (activeTimeout) {
-      window.clearTimeout(activeTimeout);
-      delete paymentVerificationTimeoutsRef.current[orderId];
-    }
-
-    setVerificationCountdownByOrder((current) => {
-      if (current[orderId] === undefined) return current;
-      const next = { ...current };
-      delete next[orderId];
-      return next;
-    });
-  };
-
-  const startPaymentVerificationWindow = (orderId: string) => {
-    clearPaymentVerificationWindow(orderId);
-    setVerificationCountdownByOrder((current) => ({ ...current, [orderId]: 10 }));
-
-    paymentVerificationIntervalsRef.current[orderId] = window.setInterval(() => {
-      setVerificationCountdownByOrder((current) => {
-        const existing = current[orderId];
-        if (existing === undefined) return current;
-        if (existing <= 1) {
-          const next = { ...current };
-          delete next[orderId];
-          return next;
-        }
-        return { ...current, [orderId]: existing - 1 };
-      });
-    }, 1000);
-
-    paymentVerificationTimeoutsRef.current[orderId] = window.setTimeout(() => {
-      clearPaymentVerificationWindow(orderId);
-      setBusyOrderId(orderId);
-      void refreshMpesaPaymentStatus(orderId).finally(() => setBusyOrderId(null));
-    }, 10_000);
-  };
-
-  useEffect(() => {
-    return () => {
-      for (const orderId of Object.keys(paymentVerificationIntervalsRef.current)) {
-        window.clearInterval(paymentVerificationIntervalsRef.current[orderId]);
-      }
-      for (const orderId of Object.keys(paymentVerificationTimeoutsRef.current)) {
-        window.clearTimeout(paymentVerificationTimeoutsRef.current[orderId]);
-      }
-      paymentVerificationIntervalsRef.current = {};
-      paymentVerificationTimeoutsRef.current = {};
-    };
-  }, []);
-
   const shippingOrders = useMemo(
     () =>
       [...sellingOrders, ...buyingOrders].filter((order, index, all) => {
@@ -1080,54 +962,14 @@ export default function Orders() {
     [sellingOrders, buyingOrders],
   );
 
-  useEffect(() => {
-    const defaultPhone = profile?.phone?.trim() || profile?.payout_mpesa_number?.trim();
-    if (!defaultPhone) return;
-
-    setPaymentPhoneByOrder((current) => {
-      let changed = false;
-      const next = { ...current };
-
-      for (const order of buyingOrders) {
-        if (order.payment_status === "paid" || order.status === "cancelled" || next[order.id]?.trim()) {
-          continue;
-        }
-
-        next[order.id] = defaultPhone;
-        changed = true;
-      }
-
-      return changed ? next : current;
-    });
-  }, [buyingOrders, profile?.phone, profile?.payout_mpesa_number]);
-
-  useEffect(() => {
-    for (const order of buyingOrders) {
-      if (order.payment_status === "paid" || order.status === "cancelled" || order.payment_status === "failed") {
-        clearPaymentVerificationWindow(order.id);
-      }
-    }
-  }, [buyingOrders]);
-
   const filteredSellingOrders = useMemo(
     () => sellingOrders.filter((order) => matchesTransactionSearch(order, transactionSearch)),
     [sellingOrders, transactionSearch],
   );
 
-  const pendingPaymentOrders = useMemo(
-    () => buyingOrders.filter((order) => order.payment_status !== "paid" && order.status !== "cancelled"),
-    [buyingOrders],
-  );
-
-  const paidBuyingOrders = useMemo(
-    () => buyingOrders.filter((order) => order.payment_status === "paid" || order.status === "cancelled"),
-    [buyingOrders],
-  );
-
   const filteredBuyingOrders = useMemo(
-    () =>
-      (showPendingPayments ? pendingPaymentOrders : paidBuyingOrders).filter((order) => matchesTransactionSearch(order, transactionSearch)),
-    [paidBuyingOrders, pendingPaymentOrders, showPendingPayments, transactionSearch],
+    () => buyingOrders.filter((order) => matchesTransactionSearch(order, transactionSearch)),
+    [buyingOrders, transactionSearch],
   );
 
   const filteredShippingOrders = useMemo(
@@ -1141,7 +983,7 @@ export default function Orders() {
 
   useEffect(() => {
     setBuyingPage(1);
-  }, [showPendingPayments, transactionSearch, filteredBuyingOrders.length]);
+  }, [transactionSearch, filteredBuyingOrders.length]);
 
   useEffect(() => {
     setShippingPage(1);
@@ -1166,13 +1008,13 @@ export default function Orders() {
     const totalSellingValue = sellingOrders.reduce((sum, order) => sum + Number(order.total_price), 0);
     const totalBuyingValue = buyingOrders.reduce((sum, order) => sum + Number(order.total_price), 0);
     const inTransit = shippingOrders.filter((order) => order.status === "shipped").length;
-    const pendingPayments = buyingOrders.filter((order) => order.payment_status !== "paid" && order.status !== "cancelled").length;
+    const awaitingFulfilment = buyingOrders.filter((order) => ["pending", "confirmed", "processing"].includes(order.status)).length;
 
     return [
       { label: "Selling", value: String(sellingOrders.length), detail: `KES ${totalSellingValue.toLocaleString()} total order value`, icon: Package },
       { label: "Buying", value: String(buyingOrders.length), detail: `KES ${totalBuyingValue.toLocaleString()} committed`, icon: ShoppingBag },
       { label: "Shipping", value: String(inTransit), detail: "Orders currently in transit", icon: Truck },
-      { label: "Payments Pending", value: String(pendingPayments), detail: "Buying orders still awaiting payment", icon: CreditCard },
+      { label: "Awaiting Fulfilment", value: String(awaitingFulfilment), detail: "Buyer orders being prepared", icon: Package },
     ];
   }, [buyingOrders, sellingOrders, shippingOrders]);
 
@@ -1207,23 +1049,6 @@ export default function Orders() {
       setRefundDialogOrder(null);
       setRefundReason("");
     }
-  };
-
-  const handleRefreshPayment = async (orderId: string) => {
-    clearPaymentVerificationWindow(orderId);
-    setBusyOrderId(orderId);
-    await refreshMpesaPaymentStatus(orderId);
-    setBusyOrderId(null);
-  };
-
-  const handleStartPayment = async (orderId: string) => {
-    setBusyOrderId(orderId);
-    const started = await initiateMpesaPayment(orderId, paymentPhoneByOrder[orderId] || "");
-    if (started) {
-      startPaymentVerificationWindow(orderId);
-    }
-    setPaymentDialogOrder(null);
-    setBusyOrderId(null);
   };
 
   const handleDownloadTransactions = () => {
@@ -1563,12 +1388,9 @@ export default function Orders() {
                     startIndex={(sellingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="selling"
                     busyOrderId={busyOrderId}
-                    verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
                     onCancelOrder={handleCancelOrder}
                     onRequestRefund={setRefundDialogOrder}
-                    onOpenPayment={setPaymentDialogOrder}
-                    onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
                   />
                   <PaginationControls page={sellingPage} totalItems={filteredSellingOrders.length} onPageChange={setSellingPage} />
@@ -1580,32 +1402,22 @@ export default function Orders() {
               <div className="rounded-[1.1rem] border border-amber-200/70 bg-amber-50/70 p-4 dark:border-amber-500/20 dark:bg-amber-500/10">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-foreground">Buyer payment and pickup consistency</p>
+                    <p className="text-sm font-semibold text-foreground">Order tracking and fulfilment</p>
                     <p className="text-xs text-muted-foreground">
-                      Delivery is county-office pickup. Buyer funds land in AgriLink escrow first, then seller payout is released after official delivery sign-off.
+                      Payment is completed from Cart checkout. Use Orders to follow delivery, contact the seller, cancel eligible orders, view receipts, and request refunds where applicable.
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={() => setShowPendingPayments((current) => !current)}
-                  >
-                    {showPendingPayments ? "Show Paid / Completed" : `Show Pending Payments (${pendingPaymentOrders.length})`}
-                  </Button>
                 </div>
               </div>
               {loading && <div className="rounded-[1.2rem] border border-border bg-white/85 p-4 text-sm text-muted-foreground">Loading buying orders...</div>}
               {!loading && !filteredBuyingOrders.length && (
                 <OrderEmptyState
                   icon={ShoppingBag}
-                  title={transactionSearch ? "No matching purchase orders" : showPendingPayments ? "No pending payment orders" : "No paid purchase orders yet"}
+                  title={transactionSearch ? "No matching purchase orders" : "No purchase orders yet"}
                   detail={
                     transactionSearch
                       ? "Try another transaction ID, receipt number, or checkout reference."
-                      : showPendingPayments
-                        ? "Pending M-Pesa confirmations will appear here after checkout."
-                        : "Paid and completed buyer orders are organized here."
+                      : "Orders paid through Cart checkout will appear here for tracking and fulfilment."
                   }
                 />
               )}
@@ -1616,12 +1428,9 @@ export default function Orders() {
                     startIndex={(buyingPage - 1) * TRANSACTIONS_PER_PAGE}
                     view="buying"
                     busyOrderId={busyOrderId}
-                    verificationCountdownByOrder={verificationCountdownByOrder}
                     onChangeStatus={(orderId, status) => void handleChangeStatus(orderId, status)}
                     onCancelOrder={handleCancelOrder}
                     onRequestRefund={setRefundDialogOrder}
-                    onOpenPayment={setPaymentDialogOrder}
-                    onRefreshPayment={(orderId) => void handleRefreshPayment(orderId)}
                     onViewReceipt={setReceiptOrder}
                   />
                   <PaginationControls page={buyingPage} totalItems={filteredBuyingOrders.length} onPageChange={setBuyingPage} />
@@ -1655,28 +1464,6 @@ export default function Orders() {
           </TabsContent>
         </Tabs>
       </div>
-
-      <MpesaPaymentDialog
-        open={Boolean(paymentDialogOrder)}
-        onOpenChange={(open) => !open && setPaymentDialogOrder(null)}
-        title="Pay order with M-Pesa"
-        description="Confirm the number that should receive the STK push for this order. Verification starts after about 10 seconds, and delivery is fulfilled through the AgriLink county office pickup flow."
-        amountValue={
-          paymentDialogOrder
-            ? `KES ${(Number(paymentDialogOrder.total_price) + Number(paymentDialogOrder.delivery_fee || 0)).toLocaleString()}`
-            : null
-        }
-        referenceLabel="Order"
-        referenceValue={paymentDialogOrder ? `${paymentDialogOrder.product?.name || "Product"} • ${paymentDialogOrder.id.slice(0, 8)}` : null}
-        phoneNumber={paymentDialogOrder ? paymentPhoneByOrder[paymentDialogOrder.id] ?? "" : ""}
-        onPhoneChange={(value) => {
-          if (!paymentDialogOrder) return;
-          setPaymentPhoneByOrder((current) => ({ ...current, [paymentDialogOrder.id]: value }));
-        }}
-        onConfirm={() => paymentDialogOrder && void handleStartPayment(paymentDialogOrder.id)}
-        busy={Boolean(paymentDialogOrder && busyOrderId === paymentDialogOrder.id)}
-        errorMessage={paymentDialogOrder?.payment_error || null}
-      />
 
       <Dialog open={Boolean(refundDialogOrder)} onOpenChange={(open) => !open && setRefundDialogOrder(null)}>
         <DialogContent className="rounded-[1.4rem]">
