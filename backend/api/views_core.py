@@ -1087,7 +1087,10 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         ],
         "generationConfig": {
             "temperature": 0.1,
-            "maxOutputTokens": 220,
+            # Gemini 3.6 includes thinking tokens in this limit. The old 220-token
+            # cap could end the request before the required JSON object was emitted.
+            "maxOutputTokens": 1024,
+            "thinkingConfig": {"thinkingLevel": "minimal"},
             "responseMimeType": "application/json",
             "responseSchema": SCANNER_GEMINI_RESPONSE_SCHEMA,
         },

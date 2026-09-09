@@ -96,6 +96,9 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["disease"], "No disease detected")
         self.assertEqual(post.call_count, 3)
         self.assertIn("gemini-3.6-flash", post.call_args.args[0])
+        generation_config = post.call_args.kwargs["json"]["generationConfig"]
+        self.assertEqual(generation_config["maxOutputTokens"], 1024)
+        self.assertEqual(generation_config["thinkingConfig"]["thinkingLevel"], "minimal")
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
