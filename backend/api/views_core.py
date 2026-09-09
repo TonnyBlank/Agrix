@@ -883,11 +883,10 @@ SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
 SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
-# Use the model that is configured and known to accept the scanner request.
-# A second, unavailable model only turns one API failure into two failures.
-SCANNER_GEMINI_FALLBACK_MODEL = ""
+SCANNER_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash-lite"
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
+SCANNER_GEMINI_MAX_OUTPUT_TOKENS = 1536
 SCANNER_SEVERITY_VALUES = {"Low", "Moderate", "High"}
 SCANNER_UNDETERMINED_RESULT: dict[str, Any] = {
     "disease": "Unable to determine from image",
@@ -981,24 +980,29 @@ def _get_gemini_api_key() -> str | None:
 
 
 def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
-    def normalize_text(key: str) -> str:
+    def normalize_text(key: str, *aliases: str) -> str:
         value = raw.get(key)
+        if value is None:
+            value = next((raw.get(alias) for alias in aliases if raw.get(alias) is not None), None)
         if isinstance(value, str) and value.strip():
             return value.strip()
         return str(fallback.get(key) or "").strip()
 
     def normalize_level(key: str) -> str:
         value = normalize_text(key)
-        if value in SCANNER_SEVERITY_VALUES:
-            return value
+        canonical_values = {level.lower(): level for level in SCANNER_SEVERITY_VALUES}
+        if value.lower() in canonical_values:
+            return canonical_values[value.lower()]
         return str(fallback.get(key) or "Moderate")
 
-    confidence_value = raw.get("confidence")
+    confidence_value = raw.get("confidence", raw.get("confidenceScore"))
     try:
-        confidence = round(float(confidence_value), 1)
+        confidence = float(confidence_value)
     except (TypeError, ValueError):
         confidence = float(fallback.get("confidence") or 0.0)
-    confidence = max(0.0, min(100.0, confidence))
+    if 0 < confidence <= 1:
+        confidence *= 100
+    confidence = round(max(0.0, min(100.0, confidence)), 1)
 
     organic_alternatives = raw.get("organicAlternatives")
     normalized_alternatives = [
@@ -1018,21 +1022,26 @@ def _normalize_scanner_result(raw: dict[str, Any], fallback: dict[str, Any]) -> 
     if not normalized_fertilizers:
         normalized_fertilizers = [str(item).strip() for item in fallback.get("fertilizerRecommendations") or [] if str(item).strip()]
 
-    disease = normalize_text("disease")
+    disease = normalize_text("disease", "diagnosis")
     # Gemini is responsible for deciding whether the crop/symptoms are clear.
     # Do not turn its legitimate lower-confidence diagnosis into a false 0%
     # result; show the confidence so the farmer can judge the uncertainty.
-    if disease == SCANNER_UNDETERMINED_RESULT["disease"]:
+    if disease.lower() in {
+        "unable to determine from image",
+        "unable to determine",
+        "not enough information",
+        "unknown",
+    }:
         return dict(SCANNER_UNDETERMINED_RESULT)
 
     return {
         "disease": disease,
-        "scientificName": normalize_text("scientificName"),
+        "scientificName": normalize_text("scientificName", "scientific_name"),
         "crop": normalize_text("crop"),
         "confidence": confidence,
         "severity": normalize_level("severity"),
         "spreadRisk": normalize_level("spreadRisk"),
-        "affectedArea": normalize_text("affectedArea"),
+        "affectedArea": normalize_text("affectedArea", "affected_area"),
         "description": normalize_text("description"),
         "treatment": normalize_text("treatment"),
         "organicAlternatives": normalized_alternatives[:5],
@@ -1076,15 +1085,14 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
     fallback = _build_scanner_result(file_name, content)
     image_base64 = base64.b64encode(content).decode("utf-8")
     prompt = (
-        "You are an agronomy assistant for smallholder farmers. Analyze this crop photo and return only JSON. "
-        "Only name a disease when visible symptoms in this specific image support it. Do not infer from file names, crop expectations, or missing details. "
-        "If the image appears healthy, set disease to No disease detected and explain the visible healthy evidence. "
-        "If the crop or symptoms are unclear, set disease to Unable to determine from image, scientificName to Not assessed, confidence to 0, "
-        "and treatment to Do not apply a disease treatment based on this result. "
-        "Keep treatment and prevention practical for field use only when a disease is clearly supported. "
-        "Set severity and spreadRisk to one of Low, Moderate, or High. "
-        "Set affectedArea as a short range like 0-5% or 20-35%. "
-        "Provide 2-3 specific fertilizerRecommendations."
+        "You are an agronomy assistant for smallholder farmers. Analyze this crop photo and return only JSON matching the schema. "
+        "Base every conclusion on visible evidence in this image only; never infer from the filename or missing details. "
+        "When a usable leaf, fruit, or plant tissue has visible symptoms, identify the single most likely diagnosis and give a confidence percentage from 0 to 100. "
+        "Use Unable to determine from image only when crop tissue or symptoms are genuinely not visible, the image is too blurred/distant, or no reliable conclusion is possible. "
+        "If the image is healthy, set disease to No disease detected and state the healthy evidence. "
+        "For a disease, describe the visible symptoms and give concise practical actions that fit smallholder farms. Do not invent pesticide rates or recommend restricted products; advise following the Kenyan product label and local agronomy guidance. "
+        "Set severity and spreadRisk to Low, Moderate, or High. Set affectedArea as a visible range such as 0-5% or 20-35%. "
+        "Return fertilizerRecommendations only for clear nutrient-management advice; otherwise return an empty array."
     )
     payload = {
         "contents": [
@@ -1098,8 +1106,8 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         ],
         "generationConfig": {
             "temperature": 0.1,
-            # This allows enough room for every required diagnosis field.
-            "maxOutputTokens": 1024,
+            # Reserve enough room for every field, treatment, and prevention step.
+            "maxOutputTokens": SCANNER_GEMINI_MAX_OUTPUT_TOKENS,
             "responseMimeType": "application/json",
             "responseSchema": SCANNER_GEMINI_RESPONSE_SCHEMA,
         },

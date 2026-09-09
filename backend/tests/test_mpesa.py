@@ -78,6 +78,17 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["disease"], "Bacterial spot")
         self.assertEqual(result["confidence"], 62.0)
 
+    def test_scanner_normalizes_gemini_confidence_fraction_and_severity_case(self):
+        result = _normalize_scanner_result(
+            {"diagnosis": "Bacterial spot", "confidenceScore": 0.78, "severity": "moderate", "spreadRisk": "HIGH"},
+            _build_scanner_result("pepper.jpg", b"image-data"),
+        )
+
+        self.assertEqual(result["disease"], "Bacterial spot")
+        self.assertEqual(result["confidence"], 78.0)
+        self.assertEqual(result["severity"], "Moderate")
+        self.assertEqual(result["spreadRisk"], "High")
+
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
     @patch("api.views_core.requests.post")
@@ -106,7 +117,7 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(post.call_count, 3)
         self.assertIn("gemini-2.5-flash", post.call_args.args[0])
         generation_config = post.call_args.kwargs["json"]["generationConfig"]
-        self.assertEqual(generation_config["maxOutputTokens"], 1024)
+        self.assertEqual(generation_config["maxOutputTokens"], 1536)
         self.assertEqual(generation_config["thinkingConfig"], {"thinkingBudget": 0})
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
@@ -138,16 +149,31 @@ class MpesaHelperTests(unittest.TestCase):
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.requests.post")
-    def test_gemini_scanner_returns_the_quota_error_without_trying_an_unknown_fallback_model(self, post):
+    def test_gemini_scanner_uses_flash_lite_when_flash_quota_is_exhausted(self, post):
         quota_error = Mock(status_code=429, text='{"error":{"status":"RESOURCE_EXHAUSTED"}}')
         quota_error.raise_for_status.side_effect = requests.HTTPError(response=quota_error)
-        post.return_value = quota_error
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "text": '{"disease":"Bacterial spot","scientificName":"Xanthomonas spp.","crop":"Pepper","confidence":78,"severity":"Moderate","spreadRisk":"High","affectedArea":"10-20%","description":"Brown leaf spots with yellow halos are visible.","treatment":"Remove badly affected leaves. Use clean tools.","organicAlternatives":["Improve airflow"],"fertilizerRecommendations":[],"prevention":"Avoid overhead irrigation."}'
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        post.side_effect = [quota_error, success]
 
-        with self.assertRaises(requests.HTTPError):
-            _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
 
-        self.assertEqual(post.call_count, 1)
-        self.assertIn("gemini-2.5-flash", post.call_args.args[0])
+        self.assertEqual(result["disease"], "Bacterial spot")
+        self.assertEqual(post.call_count, 2)
+        self.assertIn("gemini-2.5-flash", post.call_args_list[0].args[0])
+        self.assertIn("gemini-2.5-flash-lite", post.call_args_list[1].args[0])
 
     @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.requests.post")
