@@ -55,7 +55,7 @@ SUPABASE_ANON_KEY=your-supabase-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-2.5-flash
 
 MPESA_ENV=sandbox
 MPESA_MOCK_MODE=true

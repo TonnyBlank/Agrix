@@ -882,8 +882,10 @@ def _restock_failed_order(client, order: dict[str, Any]) -> None:
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
-SCANNER_GEMINI_MODEL = "gemini-3.6-flash"
-SCANNER_GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+SCANNER_GEMINI_MODEL = "gemini-2.5-flash"
+# Use the model that is configured and known to accept the scanner request.
+# A second, unavailable model only turns one API failure into two failures.
+SCANNER_GEMINI_FALLBACK_MODEL = ""
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
 SCANNER_MIN_DIAGNOSIS_CONFIDENCE = 70.0
@@ -1094,16 +1096,19 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         ],
         "generationConfig": {
             "temperature": 0.1,
-            # Gemini 3.6 includes thinking tokens in this limit. The old 220-token
-            # cap could end the request before the required JSON object was emitted.
+            # This allows enough room for every required diagnosis field.
             "maxOutputTokens": 1024,
-            "thinkingConfig": {"thinkingLevel": "minimal"},
             "responseMimeType": "application/json",
             "responseSchema": SCANNER_GEMINI_RESPONSE_SCHEMA,
         },
     }
+    # Gemini 2.5 Flash counts thinking tokens against maxOutputTokens. Crop
+    # diagnoses need the response budget for the complete JSON document.
+    if model_name.startswith("gemini-2.5-"):
+        payload["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+
     model_names = [model_name]
-    if model_name != SCANNER_GEMINI_FALLBACK_MODEL:
+    if SCANNER_GEMINI_FALLBACK_MODEL and model_name != SCANNER_GEMINI_FALLBACK_MODEL:
         model_names.append(SCANNER_GEMINI_FALLBACK_MODEL)
 
     body: dict[str, Any] | None = None

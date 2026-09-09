@@ -69,7 +69,7 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.0)
         self.assertEqual(result["organicAlternatives"], [])
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
     @patch("api.views_core.requests.post")
     def test_gemini_scanner_retries_503_on_supported_model(self, post, _sleep):
@@ -95,12 +95,12 @@ class MpesaHelperTests(unittest.TestCase):
 
         self.assertEqual(result["disease"], "No disease detected")
         self.assertEqual(post.call_count, 3)
-        self.assertIn("gemini-3.6-flash", post.call_args.args[0])
+        self.assertIn("gemini-2.5-flash", post.call_args.args[0])
         generation_config = post.call_args.kwargs["json"]["generationConfig"]
         self.assertEqual(generation_config["maxOutputTokens"], 1024)
-        self.assertEqual(generation_config["thinkingConfig"]["thinkingLevel"], "minimal")
+        self.assertEqual(generation_config["thinkingConfig"], {"thinkingBudget": 0})
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
     @patch("api.views_core.requests.post")
     def test_gemini_scanner_retries_an_empty_json_response(self, post, _sleep):
@@ -127,35 +127,20 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["disease"], "No disease detected")
         self.assertEqual(post.call_count, 2)
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.requests.post")
-    def test_gemini_scanner_switches_to_flash_lite_after_quota_error(self, post):
+    def test_gemini_scanner_returns_the_quota_error_without_trying_an_unknown_fallback_model(self, post):
         quota_error = Mock(status_code=429, text='{"error":{"status":"RESOURCE_EXHAUSTED"}}')
         quota_error.raise_for_status.side_effect = requests.HTTPError(response=quota_error)
-        success = Mock(status_code=200)
-        success.json.return_value = {
-            "candidates": [
-                {
-                    "content": {
-                        "parts": [
-                            {
-                                "text": '{"disease":"No disease detected","scientificName":"Not applicable","crop":"Tomato","confidence":88,"severity":"Low","spreadRisk":"Low","affectedArea":"0%","description":"No clear disease symptoms are visible.","treatment":"Continue normal crop monitoring.","organicAlternatives":[],"fertilizerRecommendations":[],"prevention":"Inspect the crop weekly."}'
-                            }
-                        ]
-                    }
-                }
-            ]
-        }
-        post.side_effect = [quota_error, success]
+        post.return_value = quota_error
 
-        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+        with self.assertRaises(requests.HTTPError):
+            _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
 
-        self.assertEqual(result["disease"], "No disease detected")
-        self.assertEqual(post.call_count, 2)
-        self.assertIn("gemini-3.6-flash", post.call_args_list[0].args[0])
-        self.assertIn("gemini-3.5-flash-lite", post.call_args_list[1].args[0])
+        self.assertEqual(post.call_count, 1)
+        self.assertIn("gemini-2.5-flash", post.call_args.args[0])
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-2.5-flash"}, clear=False)
     @patch("api.views_core.requests.post")
     def test_gemini_scanner_uses_json_after_thought_part(self, post):
         success = Mock(status_code=200)
