@@ -1135,7 +1135,21 @@ def _call_gemini_crop_scanner(file_name: str, mime_type: str, content: bytes) ->
         raise ApiException("Gemini returned no crop analysis candidates.", 502)
 
     parts = ((candidates[0].get("content") or {}).get("parts")) or []
-    text_part = next((part.get("text") for part in parts if isinstance(part, dict) and part.get("text")), None)
+    text_parts = [
+        str(part["text"])
+        for part in parts
+        if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip()
+    ]
+    visible_text_parts = [
+        str(part["text"])
+        for part in parts
+        if isinstance(part, dict)
+        and not part.get("thought")
+        and isinstance(part.get("text"), str)
+        and part["text"].strip()
+    ]
+    # Gemini thinking models can send a thought part before the final JSON part.
+    text_part = (visible_text_parts or text_parts or [None])[-1]
     if not text_part:
         raise ApiException("Gemini returned an empty crop analysis response.", 502)
 
@@ -1210,19 +1224,20 @@ def scanner_crops(request: HttpRequest):
 
     scanned_at = now_iso()
     scan_record: dict[str, Any] = {}
-    try:
-        scan_record = _persist_crop_scanner_scan(
-            request,
-            file_name=image.name,
-            mime_type=image.content_type or "image/jpeg",
-            image_content=content,
-            analysis_mode=analysis_mode,
-            advisory=advisory,
-            result=result,
-            scanned_at=scanned_at,
-        )
-    except Exception as exc:
-        logger.warning("Failed to persist crop scanner result; continuing with response: %s", exc)
+    if result.get("disease") != SCANNER_UNDETERMINED_RESULT["disease"]:
+        try:
+            scan_record = _persist_crop_scanner_scan(
+                request,
+                file_name=image.name,
+                mime_type=image.content_type or "image/jpeg",
+                image_content=content,
+                analysis_mode=analysis_mode,
+                advisory=advisory,
+                result=result,
+                scanned_at=scanned_at,
+            )
+        except Exception as exc:
+            logger.warning("Failed to persist crop scanner result; continuing with response: %s", exc)
 
     return JsonResponse(
         {

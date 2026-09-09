@@ -97,6 +97,30 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(post.call_count, 3)
         self.assertIn("gemini-3.6-flash", post.call_args.args[0])
 
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
+    @patch("api.views_core.requests.post")
+    def test_gemini_scanner_uses_json_after_thought_part(self, post):
+        success = Mock(status_code=200)
+        success.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"thought": True, "text": "I need to inspect the crop symptoms before answering."},
+                            {
+                                "text": '{"disease":"No disease detected","scientificName":"Not applicable","crop":"Tomato","confidence":88,"severity":"Low","spreadRisk":"Low","affectedArea":"0%","description":"No clear disease symptoms are visible.","treatment":"Continue normal crop monitoring.","organicAlternatives":[],"fertilizerRecommendations":[],"prevention":"Inspect the crop weekly."}'
+                            },
+                        ]
+                    }
+                }
+            ]
+        }
+        post.return_value = success
+
+        result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
+
+        self.assertEqual(result["disease"], "No disease detected")
+
     def test_failed_payment_restock_is_idempotent(self):
         client = Mock()
         order = {"product_id": "product-1", "quantity": 2, "status": "pending", "payment_status": "failed"}
