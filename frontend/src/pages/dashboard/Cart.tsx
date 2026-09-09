@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { LoaderCircle, ShieldCheck, ShoppingBag, ShoppingCart, Store, Trash2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -22,6 +22,11 @@ type CheckoutOrder = {
   delivery_fee: number;
 };
 
+type CheckoutNotice = {
+  tone: "success" | "warning";
+  message: string;
+};
+
 function canCheckout(item: CartItem) {
   if (!item.product) return false;
   if (!item.product.is_available) return false;
@@ -35,7 +40,6 @@ function formatDistanceLabel(distanceKm: number, sameCounty: boolean) {
 }
 
 export default function Cart() {
-  const navigate = useNavigate();
   const { profile } = useAuth();
   const { items, loading, updateItem, removeItem } = useCart();
 
@@ -47,7 +51,7 @@ export default function Cart() {
   const [isCheckingOutSelected, setIsCheckingOutSelected] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [paymentPhone, setPaymentPhone] = useState("");
-  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutNotice, setCheckoutNotice] = useState<CheckoutNotice | null>(null);
 
   const buyerCounty = profile?.county?.trim() || "";
   const buyerSubCounty = typeof window !== "undefined" ? window.localStorage.getItem("farm_sub_county") || "" : "";
@@ -287,6 +291,10 @@ export default function Cart() {
 
     if (paidCount) {
       toast.success(`${paidCount} checkout payment${paidCount === 1 ? "" : "s"} confirmed.`);
+      setCheckoutNotice({
+        tone: "success",
+        message: `${paidCount} payment${paidCount === 1 ? "" : "s"} confirmed. Your order is now ready for fulfilment and delivery tracking.`,
+      });
     }
   };
 
@@ -326,11 +334,10 @@ export default function Cart() {
     setPaymentDialogOpen(false);
 
     if (paymentStartedOrders.length) {
-      toast.success(
-        `${paymentStartedOrders.length} M-Pesa prompt${paymentStartedOrders.length === 1 ? "" : "s"} sent. Approve the prompt${paymentStartedOrders.length === 1 ? "" : "s"} on your phone.`,
-      );
+      const message = `${paymentStartedOrders.length} M-Pesa prompt${paymentStartedOrders.length === 1 ? "" : "s"} sent. Approve the prompt${paymentStartedOrders.length === 1 ? "" : "s"} on your phone to complete checkout.`;
+      toast.success(message);
+      setCheckoutNotice({ tone: "success", message });
       void verifyStartedPayments(paymentStartedOrders);
-      void navigate("/dashboard/orders");
     }
 
     if (failureCount) {
@@ -338,8 +345,11 @@ export default function Cart() {
     }
 
     if (paymentFailureCount) {
-      const message = `${paymentFailureCount} order${paymentFailureCount === 1 ? "" : "s"} was created but no M-Pesa prompt could be sent. Cancel the unpaid order from Orders, then add the product to Cart to try again.`;
-      setCheckoutError(message);
+      const startedMessage = paymentStartedOrders.length
+        ? `${paymentStartedOrders.length} M-Pesa prompt${paymentStartedOrders.length === 1 ? " was" : "s were"} sent successfully. `
+        : "";
+      const message = `${startedMessage}${paymentFailureCount} order${paymentFailureCount === 1 ? "" : "s"} could not start an M-Pesa prompt. Open Orders to cancel the unpaid order before adding the product to Cart again.`;
+      setCheckoutNotice({ tone: "warning", message });
       toast.error(message);
     }
   };
@@ -387,6 +397,28 @@ export default function Cart() {
           </div>
         </section>
 
+        {checkoutNotice ? (
+          <section
+            className={`flex flex-col gap-3 rounded-[1.4rem] border p-4 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.2)] sm:flex-row sm:items-center sm:justify-between ${
+              checkoutNotice.tone === "success"
+                ? "border-emerald-300 bg-emerald-50/70 dark:bg-emerald-500/10"
+                : "border-amber-300 bg-amber-50/70 dark:bg-amber-500/10"
+            }`}
+            aria-live="polite"
+          >
+            <div className="flex items-start gap-3">
+              <ShieldCheck className={`mt-0.5 h-5 w-5 shrink-0 ${checkoutNotice.tone === "success" ? "text-emerald-700" : "text-amber-700"}`} />
+              <div>
+                <p className="font-semibold text-foreground">Cart checkout update</p>
+                <p className="mt-1 text-sm text-muted-foreground">{checkoutNotice.message}</p>
+              </div>
+            </div>
+            <Button asChild variant="outline" className="shrink-0 rounded-xl">
+              <Link to="/dashboard/orders">Track in Orders</Link>
+            </Button>
+          </section>
+        ) : null}
+
         <section className="rounded-[1.4rem] border border-border/70 bg-white/90 p-4 shadow-[0_16px_28px_-24px_rgba(15,23,42,0.2)] dark:bg-card/90">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -409,7 +441,7 @@ export default function Cart() {
                 className="rounded-xl"
                 disabled={!selectedCheckoutableItems.length || isCheckingOutSelected}
                 onClick={() => {
-                  setCheckoutError(null);
+                  setCheckoutNotice(null);
                   setPaymentDialogOpen(true);
                 }}
               >
@@ -557,7 +589,7 @@ export default function Cart() {
         open={paymentDialogOpen}
         onOpenChange={(open) => {
           setPaymentDialogOpen(open);
-          if (open) setCheckoutError(null);
+          if (open) setCheckoutNotice(null);
         }}
         title="Complete cart checkout"
         description={
@@ -574,7 +606,6 @@ export default function Cart() {
         confirmLabel="Place Order & Pay"
         confirmPendingLabel="Creating orders..."
         busy={isCheckingOutSelected}
-        errorMessage={checkoutError}
       />
     </DashboardShell>
   );
