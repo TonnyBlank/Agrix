@@ -24,8 +24,10 @@ export const supabase = createClient<Database>(
   SUPABASE_KEY,
   {
     auth: {
-      storage: localStorage,
-      persistSession: true,
+      // Keep credentials out of browser storage. A full page reload requires
+      // authentication again, but an XSS payload cannot recover a persisted
+      // access or refresh token from localStorage/sessionStorage.
+      persistSession: false,
       autoRefreshToken: true,
       lock: processLock,
     },

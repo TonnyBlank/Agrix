@@ -30,6 +30,16 @@ class SimpleCorsMiddleware:
         if allowed_origin and allowed_origin != "*":
             response["Access-Control-Allow-Credentials"] = "true"
 
+        # This service exposes JSON APIs only. These headers protect every
+        # response, including error pages generated before a view is reached.
+        response["X-Content-Type-Options"] = "nosniff"
+        response["X-Frame-Options"] = "DENY"
+        response["Referrer-Policy"] = "no-referrer"
+        response["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response["Content-Security-Policy"] = "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+        if not self.debug_allow_request_origin:
+            response["Strict-Transport-Security"] = "max-age=31536000"
+
         return response
 
     def _resolve_origin(self, origin: Optional[str]) -> Optional[str]:
