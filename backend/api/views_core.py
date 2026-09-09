@@ -882,8 +882,8 @@ def _restock_failed_order(client, order: dict[str, Any]) -> None:
 SCANNER_ALLOWED_ROLES = {"farmer_pro", "company", "admin"}
 SCANNER_ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 SCANNER_MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
-SCANNER_GEMINI_MODEL = "gemini-flash-latest"
-SCANNER_GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+SCANNER_GEMINI_MODEL = "gemini-3.6-flash"
+SCANNER_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
 SCANNER_GEMINI_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 SCANNER_GEMINI_MAX_ATTEMPTS = 3
 SCANNER_MIN_DIAGNOSIS_CONFIDENCE = 70.0

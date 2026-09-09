@@ -69,10 +69,10 @@ class MpesaHelperTests(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.0)
         self.assertEqual(result["organicAlternatives"], [])
 
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-flash-latest"}, clear=False)
+    @patch.dict(os.environ, {"GEMINI_API_KEY": "real-key-value", "GEMINI_MODEL": "gemini-3.6-flash"}, clear=False)
     @patch("api.views_core.time.sleep")
     @patch("api.views_core.requests.post")
-    def test_gemini_scanner_retries_503_then_uses_fallback_model(self, post, _sleep):
+    def test_gemini_scanner_retries_503_on_supported_model(self, post, _sleep):
         unavailable = Mock(status_code=503)
         unavailable.raise_for_status.side_effect = requests.HTTPError(response=unavailable)
         success = Mock(status_code=200)
@@ -89,13 +89,13 @@ class MpesaHelperTests(unittest.TestCase):
                 }
             ]
         }
-        post.side_effect = [unavailable, unavailable, unavailable, success]
+        post.side_effect = [unavailable, unavailable, success]
 
         result = _call_gemini_crop_scanner("healthy-leaf.jpg", "image/jpeg", b"image-data")
 
         self.assertEqual(result["disease"], "No disease detected")
-        self.assertEqual(post.call_count, 4)
-        self.assertIn("gemini-2.5-flash", post.call_args.args[0])
+        self.assertEqual(post.call_count, 3)
+        self.assertIn("gemini-3.6-flash", post.call_args.args[0])
 
     def test_failed_payment_restock_is_idempotent(self):
         client = Mock()
