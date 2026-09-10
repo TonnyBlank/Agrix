@@ -413,7 +413,7 @@ export function useMyProducts() {
       notifyProductsChanged();
       await load(true);
     } catch (error) {
-      toast.error("Failed to delete product");
+      toast.error(error instanceof Error ? error.message : "Failed to delete product");
     }
   };
 

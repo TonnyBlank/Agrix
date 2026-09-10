@@ -1,11 +1,12 @@
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import requests
 
 from api.common import ApiException, normalize_mpesa_amount, resolve_mpesa_payment_state, validate_mpesa_callback_url
-from api.views_core import _build_scanner_result, _call_gemini_crop_scanner, _get_gemini_api_key, _normalize_scanner_result, _restock_failed_order
+from api.views_core import _build_scanner_result, _call_gemini_crop_scanner, _get_gemini_api_key, _normalize_scanner_result, _product_delete, _restock_failed_order
 
 
 class MpesaHelperTests(unittest.TestCase):
@@ -216,6 +217,35 @@ class MpesaHelperTests(unittest.TestCase):
         client.rpc.assert_called_once_with(
             "increment_product_stock",
             {"p_product_id": "product-1", "p_quantity": 2.0},
+        )
+
+    def test_product_delete_explains_when_orders_exist(self):
+        client = Mock()
+        client.select.side_effect = [
+            ({"id": "product-1"}, None),
+            ([{"id": "order-1"}], None),
+        ]
+        request = SimpleNamespace(supabase=client, user_id="farmer-1")
+
+        with self.assertRaisesRegex(ApiException, "has existing orders") as error:
+            _product_delete(request, "product-1")
+
+        self.assertEqual(error.exception.status, 409)
+        client.delete.assert_not_called()
+
+    def test_product_delete_removes_an_unordered_product(self):
+        client = Mock()
+        client.select.side_effect = [
+            ({"id": "product-1"}, None),
+            ([], None),
+        ]
+        request = SimpleNamespace(supabase=client, user_id="farmer-1")
+
+        _product_delete(request, "product-1")
+
+        client.delete.assert_called_once_with(
+            "products",
+            filters={"id": "eq.product-1", "farmer_id": "eq.farmer-1"},
         )
 
 

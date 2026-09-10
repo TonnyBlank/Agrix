@@ -1451,6 +1451,24 @@ def _product_update(request: HttpRequest, product_id: str):
 
 
 def _product_delete(request: HttpRequest, product_id: str):
+    product, _ = request.supabase.select(
+        "products",
+        select="id",
+        filters={"id": f"eq.{product_id}", "farmer_id": f"eq.{request.user_id}"},
+        single=True,
+    )
+    if not product:
+        raise ApiException("Product not found or you are not allowed to delete it", 404)
+
+    orders, _ = request.supabase.select(
+        "orders",
+        select="id",
+        filters={"product_id": f"eq.{product_id}", "farmer_id": f"eq.{request.user_id}"},
+        limit=1,
+    )
+    if orders:
+        raise ApiException("This product has existing orders and cannot be deleted. Mark it unavailable instead.", 409)
+
     request.supabase.delete("products", filters={"id": f"eq.{product_id}", "farmer_id": f"eq.{request.user_id}"})
     return JsonResponse({"success": True})
 
