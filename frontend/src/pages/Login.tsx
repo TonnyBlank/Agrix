@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import BrandWordmark from "@/components/branding/BrandWordmark";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,6 +14,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
   const { session } = useAuth();
@@ -33,10 +34,21 @@ export default function LoginPage() {
       
       if (error) {
         const normalizedMessage = error.message.toLowerCase();
+        const hasInvalidCredentials =
+          normalizedMessage.includes("invalid login credentials") ||
+          normalizedMessage.includes("invalid email or password") ||
+          normalizedMessage.includes("email or password is incorrect");
+
+        if (hasInvalidCredentials) {
+          setPassword("");
+          setShowPw(false);
+          passwordInputRef.current?.focus();
+        }
+
         toast({
           title: "Login failed",
           description:
-            normalizedMessage.includes("invalid login credentials")
+            hasInvalidCredentials
               ? "Incorrect email or password. If you do not have an account yet, please sign up first."
               : normalizedMessage.includes("email not confirmed")
                 ? "Your account is not verified yet. Open the confirmation email from Supabase, then try again."
@@ -98,6 +110,7 @@ export default function LoginPage() {
               <div className="relative">
                 <Input
                   id="password"
+                  ref={passwordInputRef}
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
